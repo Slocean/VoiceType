@@ -1,0 +1,21 @@
+[package]
+name = "voicetype-cli"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "VoiceType 命令行：录音 / 识别 / 注入全链路入口"
+
+[[bin]]
+name = "voicetype"
+path = "src/main.rs"
+
+[features]
+# 启用 sherpa-onnx 真实识别引擎（首次构建会从 GitHub 下载预编译静态库）。
+sherpa = ["voicetype-asr/sherpa"]
+
+[dependencies]
+voicetype-asr = { path = "../../crates/asr" }
+voicetype-inject = { path = "../../crates/inject" }
+voicetype-audio = { path = "../../crates/audio" }
+clap = { version = "4", features = ["derive"] }
+cpal = "0.15"

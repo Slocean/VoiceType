@@ -1,0 +1,13 @@
+[package]
+name = "voicetype-inject"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "文本注入层：把语音识别结果送入当前焦点窗口（粘贴 / 键入 / 混合三种策略）"
+
+[dependencies]
+arboard = "3"
+thiserror = "2"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_UI_Input_KeyboardAndMouse"] }

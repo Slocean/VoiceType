@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = ["crates/inject", "crates/audio", "crates/asr", "apps/demo", "apps/cli", "apps/tray"]
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"

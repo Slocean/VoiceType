@@ -1,0 +1,21 @@
+[package]
+name = "voicetype-demo"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "注入策略演示：倒计时后向当前焦点窗口注入测试文本"
+
+[[bin]]
+name = "voicetype-demo"
+path = "src/main.rs"
+
+[dependencies]
+voicetype-inject = { path = "../../crates/inject" }
+arboard = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_LibraryLoader",
+] }

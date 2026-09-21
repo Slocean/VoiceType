@@ -1,0 +1,18 @@
+[package]
+name = "voicetype-asr"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "ASR 引擎抽象：流式语音识别接口，Mock 与 sherpa-onnx（可选）两种实现"
+
+[features]
+# sherpa 实现依赖官方 sherpa-onnx crate；构建脚本会从 GitHub Releases
+# 自动下载对应平台的预编译静态库（Windows x64 约几十 MB），首次构建较慢。
+sherpa = ["dep:sherpa-onnx", "dep:sherpa-onnx-sys"]
+
+[dependencies]
+thiserror = "2"
+sherpa-onnx = { version = "1.13", optional = true }
+# FeatureConfig 等底层配置类型未从 sherpa-onnx 门面 re-export，
+# 需要直接引用其 sys 绑定 crate（版本必须与 sherpa-onnx 内部依赖一致）。
+sherpa-onnx-sys = { version = "1.13.8", optional = true }

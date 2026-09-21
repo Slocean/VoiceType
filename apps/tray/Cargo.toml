@@ -1,0 +1,26 @@
+[package]
+name = "voicetype-tray"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+description = "VoiceType 托盘常驻应用：F9 全局热键录音，实时识别并注入当前焦点窗口"
+
+[[bin]]
+name = "voicetype-tray"
+path = "src/main.rs"
+
+[dependencies]
+voicetype-audio = { path = "../../crates/audio" }
+voicetype-asr = { path = "../../crates/asr", features = ["sherpa"] }
+voicetype-inject = { path = "../../crates/inject" }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_LibraryLoader",
+    # WNDCLASSW / RegisterClassW 依赖 HBRUSH 类型，被门控在 Gdi feature 下。
+    "Win32_Graphics_Gdi",
+] }
