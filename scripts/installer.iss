@@ -28,7 +28,8 @@ UninstallDisplayIcon={app}\{#AppExeName}
 WizardStyle=modern
 
 [Languages]
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+; 中文语言包随仓库分发（choco 装的 Inno Setup 不自带），相对本脚本目录解析。
+Name: "chinesesimplified"; MessagesFile: "Languages\ChineseSimplified.isl"
 
 [Tasks]
 Name: "autostart"; Description: "开机自动启动 VoiceType"; Flags: unchecked
