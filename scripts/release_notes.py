@@ -35,8 +35,10 @@ def main() -> int:
     lines += [
         "| 形态 | 资产 | 说明 |",
         "| --- | --- | --- |",
-        "| 便携版 | `voicetype-win-x64-portable.zip` | 解压即用，先运行 `setup-models.ps1` 下载模型 |",
-        "| 安装版 | `voicetype-setup-x64.exe` | 向导安装，可选开机自启 |",
+        "| 便携版 | `voicetype-win-x64-portable.zip` | 解压即用；托盘菜单「下载语音模型…」一键获取模型 |",
+        "| 便携版（含模型） | `voicetype-win-x64-portable-with-models.zip` | 模型已内嵌，解压即用 |",
+        "| 安装版 | `voicetype-setup-x64.exe` | 向导安装，可选开机自启；装完可一键下载模型 |",
+        "| 安装版（含模型） | `voicetype-setup-x64-with-models.exe` | 模型已内嵌，安装完成即可用 |",
         "| 热更新 | `voicetype-tray.exe`（+ `.sha256`） | 已安装用户经托盘「检查更新」自动下载校验 |",
         "",
         "所有资产均附带 SHA-256 清单；应用内热更新会自动校验。",

@@ -77,31 +77,46 @@ voicetype vad-session --from-file test.wav --vad-model models/silero_vad.onnx \
 ## 模型
 
 推荐 sherpa-onnx 流式中文模型（已验证）：
-`sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23`（int8 约 14MB，
-从 https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models 下载，
-解压到 `models/` 即可）。
+`sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23`（int8 约 14MB，来源
+https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models ）。
+获取方式见下文「模型获取方式」——应用内一键下载 / 脚本 / 手动放置均可。
 
 ## 打包与分发
 
 ```bash
-# 本地打包（release 构建 → 便携版 zip + 裸 exe + 安装版 Inno Setup → 全部生成 .sha256）
+# 本地打包（release 构建 → 便携/安装 × 标准/带模型 + 裸 exe → 全部生成 .sha256）
 .\scripts\package.ps1                 # 产物在 dist\
+.\scripts\package.ps1 -WithModels     # 额外产出两种内嵌模型的变体
 .\scripts\package.ps1 -SkipBuild      # 跳过构建，仅重新收集
 .\scripts\package.ps1 -SkipInstaller  # 跳过安装包（未装 Inno Setup 时）
 
 # GitHub Actions：推 v* tag 自动构建并发布 Release（也支持手动触发）
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.3.0 && git push origin v0.3.0
 ```
 
 Release 资产（全部附 `.sha256` 清单）：
 
 | 资产 | 说明 |
 | --- | --- |
-| `voicetype-win-x64-portable.zip` | **便携版**：解压即用，免安装 |
-| `voicetype-setup-x64.exe` | **安装版**：Inno Setup 向导，按用户安装到 `%LocalAppData%\VoiceType`（无需管理员），可选开机自启 |
+| `voicetype-win-x64-portable.zip` | **便携版**：解压即用，托盘菜单「下载语音模型…」一键获取模型 |
+| `voicetype-win-x64-portable-with-models.zip` | **便携版（含模型）**：模型已内嵌，解压即用 |
+| `voicetype-setup-x64.exe` | **安装版**：Inno Setup 向导，按用户安装到 `%LocalAppData%\VoiceType`（无需管理员），可选开机自启，装完可一键下载模型 |
+| `voicetype-setup-x64-with-models.exe` | **安装版（含模型）**：模型已内嵌，安装完成即可用 |
 | `voicetype-tray.exe` | 裸 exe，便携版热更新的下载目标 |
 
-便携版使用：解压 → 执行 `.\setup-models.ps1` 下载模型 → 启动 `voicetype-tray.exe`。
+便携版使用：解压 → 启动 `voicetype-tray.exe` → 托盘右键「下载语音模型…」（含模型变体免此步）。
+
+## 模型获取方式
+
+三种方式任选，布局一致（`models\<识别模型子目录>\*.onnx` + `models\silero_vad.onnx`），可互相混用：
+
+1. **应用内一键下载**（推荐）：托盘右键 → 「下载语音模型…」，自动下载约 15MB 并解压就位，进度显示在悬浮条。
+2. **脚本下载**：exe 旁执行 `.\setup-models.ps1`（幂等，已存在的模型自动跳过）。
+3. **手动放置**：从 https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models 下载
+   `sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23`（int8）解压到 `models\`，
+   并下载 `silero_vad.onnx` 放到 `models\`。
+
+模型目录解析顺序：`VOICETYPE_MODEL_DIR` 环境变量 > exe 旁 `models\` > 工作目录 `models\`。
 
 ## 热更新与更新公告
 

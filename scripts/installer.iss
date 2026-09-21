@@ -2,12 +2,20 @@
 ; 按用户安装（无需管理员）：%LocalAppData%\VoiceType，写 install.mode 标记，
 ; 该标记是应用热更新时区分安装版（静默重装）/便携版（换 exe）的依据。
 ; 构建：ISCC.exe /DAppVersion=0.2.0 installer.iss → dist\voicetype-setup-x64.exe
+; 带模型变体：加 /DModelsDir=<模型暂存目录> → dist\voicetype-setup-x64-with-models.exe，
+; 模型解压到 {app}\models（布局与 setup-models.ps1 一致），安装后无需再下载。
 
 #define AppName "VoiceType"
 #define AppExeName "voicetype-tray.exe"
 
 #ifndef AppVersion
 #define AppVersion "0.0.0"
+#endif
+
+#ifdef ModelsDir
+#define OutBase "voicetype-setup-x64-with-models"
+#else
+#define OutBase "voicetype-setup-x64"
 #endif
 
 [Setup]
@@ -20,7 +28,7 @@ DisableProgramGroupPage=yes
 ; 按用户安装，热更静默重装也不需要提权。
 PrivilegesRequired=lowest
 OutputDir=..\dist
-OutputBaseFilename=voicetype-setup-x64
+OutputBaseFilename={#OutBase}
 Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -42,6 +50,10 @@ Source: "..\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "install.mode"; DestDir: "{app}"; Flags: ignoreversion
 ; 更新通道本地副本：离线时应用仍有公告可看。
 Source: "..\app_update.json"; DestDir: "{app}"; Flags: ignoreversion
+#ifdef ModelsDir
+; 内嵌模型：识别模型子目录 + silero_vad.onnx，与应用内下载同布局。
+Source: "{#ModelsDir}\*"; DestDir: "{app}\models"; Flags: recursesubdirs ignoreversion
+#endif
 
 [Icons]
 Name: "{userprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
@@ -50,7 +62,9 @@ Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: autost
 [Run]
 ; 不带 skipifsilent：静默重装（热更新）结束后同样拉起新版。
 Filename: "{app}\{#AppExeName}"; Flags: nowait runasoriginaluser
+#ifndef ModelsDir
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\setup-models.ps1"""; Flags: postinstall skipifsilent runasoriginaluser; Description: "下载语音识别模型（约 40MB）"
+#endif
 
 [UninstallDelete]
 ; 清理热更新残留的校验记录与日志。

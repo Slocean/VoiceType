@@ -32,6 +32,7 @@ use worker::start_worker;
 
 mod ui_main;
 mod updater;
+mod models_dl;
 
 // ---------- 入口 ----------
 
@@ -45,6 +46,8 @@ const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 const WM_WORKER_EVENT: u32 = WM_APP + 2;
 /// 更新后台任务（检查/下载/公告）完成事件。
 const WM_UPDATE_EVENT: u32 = WM_APP + 3;
+/// 模型下载后台任务进度/完成事件。
+const WM_MODEL_EVENT: u32 = WM_APP + 4;
 const HOTKEY_ID: i32 = 1;
 const TRAY_UID: u32 = 1;
 
@@ -53,6 +56,7 @@ const MENU_MODE_TYPE: i32 = 1002;
 const MENU_MODE_HYBRID: i32 = 1003;
 const MENU_UPDATE_CHECK: i32 = 1005;
 const MENU_ANNOUNCEMENT: i32 = 1006;
+const MENU_DOWNLOAD_MODELS: i32 = 1007;
 const MENU_QUIT: i32 = 1004;
 
 const OVERLAY_W: i32 = 520;
@@ -60,8 +64,30 @@ const OVERLAY_H: i32 = 72;
 /// STATIC 控件样式：居中 + 垂直居中。
 const SS_CENTER_TEXT: u32 = 0x1 | 0x200;
 
-/// 默认模型目录（相对工作目录），可用 VOICETYPE_MODEL_DIR 环境变量覆盖。
+/// 识别模型子目录名（tar 包解压后的目录名，与 setup-models.ps1 布局一致）。
+const MODEL_SUBDIR: &str = "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23";
+/// 兜底模型目录（相对工作目录，仓库开发布局），可用 VOICETYPE_MODEL_DIR 覆盖。
 const DEFAULT_MODEL_DIR: &str = "models/sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23";
+
+/// 识别模型目录解析（VAD 在其父目录 models\ 下）：
+/// VOICETYPE_MODEL_DIR 显式指定（兼容旧语义，直接指向识别模型目录）>
+/// exe 旁 models\（安装版/便携包布局）> 工作目录 models\（仓库布局）。
+fn resolve_model_dir() -> PathBuf {
+    if let Ok(d) = std::env::var("VOICETYPE_MODEL_DIR") {
+        if !d.is_empty() {
+            return PathBuf::from(d);
+        }
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let p = parent.join("models").join(MODEL_SUBDIR);
+            if p.is_dir() {
+                return p;
+            }
+        }
+    }
+    PathBuf::from(DEFAULT_MODEL_DIR)
+}
 
 // ---------- 线程间消息 ----------
 
@@ -165,12 +191,19 @@ fn find_model_files(dir: &Path) -> Option<SherpaAsrConfig> {
     })
 }
 
-/// 在模型目录内定位 VAD 模型（silero_vad.onnx）。
+/// 在识别模型目录及其父目录（models\ 根）内定位 VAD 模型（silero_vad.onnx）。
+/// setup-models.ps1 与应用内下载都把 VAD 放在 models\ 根，一并覆盖。
 fn find_vad_model(model_dir: &Path) -> Option<PathBuf> {
-    for name in ["silero_vad.onnx", "vad.onnx"] {
-        let p = model_dir.join(name);
-        if p.exists() {
-            return Some(p);
+    let mut dirs = vec![model_dir.to_path_buf()];
+    if let Some(parent) = model_dir.parent() {
+        dirs.push(parent.to_path_buf());
+    }
+    for dir in dirs {
+        for name in ["silero_vad.onnx", "vad.onnx"] {
+            let p = dir.join(name);
+            if p.exists() {
+                return Some(p);
+            }
         }
     }
     None

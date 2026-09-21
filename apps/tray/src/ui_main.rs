@@ -27,9 +27,7 @@ pub fn toggle_recording(main_hwnd: HWND) {
             return;
         }
         // 启动新的识别会话。
-        let model_dir = std::env::var("VOICETYPE_MODEL_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| PathBuf::from(DEFAULT_MODEL_DIR));
+        let model_dir = resolve_model_dir();
         let Some(asr_cfg) = find_model_files(&model_dir) else {
             set_window_text(
                 app.overlay_text,
@@ -210,6 +208,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     }
     item(MENU_UPDATE_CHECK, "检查更新…", false);
     item(MENU_ANNOUNCEMENT, "更新公告", false);
+    item(MENU_DOWNLOAD_MODELS, "下载语音模型…", false);
     let sep = wide("");
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR(sep.as_ptr()));
     let quit = wide("退出");
@@ -251,6 +250,23 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         MENU_ANNOUNCEMENT => {
             updater::spawn_fetch_announcement(hwnd.0 as isize);
         }
+        MENU_DOWNLOAD_MODELS => {
+            if models_dl::models_ready() {
+                unsafe {
+                    let text = wide("语音模型已就绪，无需下载。");
+                    let title = wide("VoiceType 模型");
+                    let _ = MessageBoxW(
+                        Some(hwnd),
+                        PCWSTR(text.as_ptr()),
+                        PCWSTR(title.as_ptr()),
+                        MB_ICONINFORMATION,
+                    );
+                }
+            } else {
+                set_window_text(overlay_text_of(hwnd), "正在下载语音模型…");
+                models_dl::spawn_model_download(hwnd.0 as isize);
+            }
+        }
         MENU_QUIT => {
             let _ = DestroyWindow(hwnd);
         }
@@ -260,6 +276,28 @@ unsafe fn show_tray_menu(hwnd: HWND) {
 
 fn overlay_text_of(hwnd: HWND) -> HWND {
     with_app(|app| app.overlay_text).unwrap_or(hwnd)
+}
+
+/// 模型下载后台任务：进度刷新悬浮条文本；结束时收起悬浮条并弹窗汇报结果。
+fn handle_model_event(_hwnd: HWND) {
+    let Some(ev) = models_dl::take_model_event() else { return };
+    if !ev.done {
+        set_window_text(overlay_text_of(_hwnd), &ev.text);
+        return;
+    }
+    with_app(|app| unsafe {
+        let _ = ShowWindow(app.overlay, SW_HIDE);
+    });
+    unsafe {
+        let title = wide(if ev.ok { "VoiceType 模型" } else { "VoiceType 模型下载失败" });
+        let text = wide(&ev.text);
+        let _ = MessageBoxW(
+            Some(_hwnd),
+            PCWSTR(text.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            if ev.ok { MB_ICONINFORMATION } else { MB_ICONWARNING },
+        );
+    }
 }
 
 /// 更新后台任务完成：弹出结果 / 询问是否立即重启应用。
@@ -317,6 +355,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_UPDATE_EVENT => {
             handle_update_event(hwnd);
+            LRESULT(0)
+        }
+        WM_MODEL_EVENT => {
+            handle_model_event(hwnd);
             LRESULT(0)
         }
         WM_TRAY_CALLBACK => {
