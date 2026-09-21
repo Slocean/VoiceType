@@ -157,6 +157,27 @@ fn create_engine(
     }
 }
 
+/// 把整段 PCM 分块喂入会话并打印全部会话事件。
+fn feed_session<V: voicetype_asr::Vad, A: voicetype_asr::StreamingAsr>(
+    session: &mut voicetype_asr::VoiceSession<V, A>,
+    pcm: &[f32],
+) {
+    let chunk = voicetype_audio::TARGET_SAMPLE_RATE as usize / 4; // 0.25s
+    // 文件没有"说话后的停顿"，补 1 秒静音模拟真实麦克风的尾静音，
+    // 否则 VAD 的静音尾判定永远不满足。
+    let mut stream = pcm.to_vec();
+    stream.extend(std::iter::repeat(0.0f32).take(voicetype_audio::TARGET_SAMPLE_RATE as usize));
+    for part in stream.chunks(chunk) {
+        for u in session.accept_samples(part).expect("会话处理失败") {
+            match u {
+                voicetype_asr::Utterance::Interim(t) => println!("识别中: {t}"),
+                voicetype_asr::Utterance::Final(t) => println!("断句定稿: {t}"),
+                voicetype_asr::Utterance::Empty => println!("（无语音内容，静默收尾）"),
+            }
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
@@ -234,6 +255,45 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             drop(printer);
             println!("实时管线运行完毕（未崩溃、无死锁）");
+        }
+        Command::VadSession {
+            from_file,
+            encoder,
+            decoder,
+            joiner,
+            tokens,
+            vad_model,
+        } => {
+            use voicetype_asr::{MockAsr, MockVad, Utterance, VoiceSession};
+
+            let pcm = voicetype_audio::load_wav(&from_file)?;
+            let stats = voicetype_audio::analyze(&pcm);
+            println!("已加载音频：{}（{:.1}s）", from_file.display(), stats.duration_secs);
+
+            #[cfg(feature = "sherpa")]
+            if let Some(vad_path) = vad_model {
+                let asr_cfg = voicetype_asr::SherpaAsrConfig {
+                    encoder: encoder.expect("--encoder"),
+                    decoder: decoder.expect("--decoder"),
+                    joiner: joiner.expect("--joiner"),
+                    tokens: tokens.expect("--tokens"),
+                    num_threads: 2,
+                };
+                let vad_cfg = voicetype_asr::SherpaVadConfig {
+                    model: vad_path,
+                    ..Default::default()
+                };
+                let mut session = VoiceSession::new(
+                    voicetype_asr::SherpaVad::new(&vad_cfg)?,
+                    voicetype_asr::SherpaAsr::new(&asr_cfg)?,
+                );
+                feed_session(&mut session, &pcm);
+                return Ok(());
+            }
+
+            // Mock 链路：2 秒（32000 采样）后断句，验证状态机骨架。
+            let mut session = VoiceSession::new(MockVad::new(32_000), MockAsr::new("（Mock 定稿文本）"));
+            feed_session(&mut session, &pcm);
         }
         Command::Record { seconds, out } => {
             let pcm = record_seconds(seconds)?;

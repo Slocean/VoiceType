@@ -39,6 +39,8 @@ pub struct VoiceSession<V: Vad, A: StreamingAsr> {
     closed: bool,
     /// 段内已上屏的文本，用于 ASR 无新假设时补 Interim。
     last_interim: String,
+    /// 会话开启后一直无语音时，累计多少采样自动 Empty 收尾（默认 5 秒）。
+    empty_after_samples: usize,
 }
 
 impl<V: Vad, A: StreamingAsr> VoiceSession<V, A> {
@@ -48,7 +50,13 @@ impl<V: Vad, A: StreamingAsr> VoiceSession<V, A> {
             asr,
             closed: false,
             last_interim: String::new(),
+            empty_after_samples: 80_000,
         }
+    }
+
+    /// 覆盖"无语音自动收尾"阈值（16kHz 采样数）。
+    pub fn set_empty_after_samples(&mut self, samples: usize) {
+        self.empty_after_samples = samples;
     }
 
     /// 是否已结束（产出过 Final/Empty 后为 true）。
@@ -81,18 +89,22 @@ impl<V: Vad, A: StreamingAsr> VoiceSession<V, A> {
             } else {
                 out.push(Utterance::Final(final_text));
             }
+            return Ok(out);
+        }
+
+        // 开启后持续无语音：自动 Empty 收尾，避免静默会话永不结束。
+        if !self.vad.seen_speech() && self.vad.total_samples() >= self.empty_after_samples {
+            self.closed = true;
+            out.push(Utterance::Empty);
         }
         Ok(out)
     }
 
-    /// 对 VAD 切出的语音段做识别：重建等价识别上下文，
-    /// 把段内音频重新喂给 ASR 并 finish 冲刷定稿。
-    ///
-    /// 注：段音频此前已喂过 ASR（用于实时 Interim），这里重喂是
-    /// 流式引擎的常规做法（zipformer 对段内重算廉价且结果稳定）。
-    /// 如未来引擎支持"从历史中回溯定稿"可替换此实现。
+    /// 对 VAD 切出的语音段做识别：重置 ASR 上下文后从零识别该段，
+    /// finish 冲刷定稿。重置是必须的——流式引擎上下文里还留着
+    /// 实时 Interim 阶段喂入的音频，不重置会把跨段内容拼进定稿。
     fn recognize_span(&mut self, span: &SpeechSpan) -> Result<String, AsrError> {
-        // 复位 ASR 到段首上下文：重新 accept 段音频再 finish。
+        self.asr.reset();
         self.asr.accept_samples(&span.samples)?;
         self.asr.finish()?;
         let mut text = String::new();

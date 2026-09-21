@@ -29,6 +29,13 @@ pub struct SherpaAsr {
 }
 
 impl SherpaAsr {
+    /// 清空流式上下文：重建内部 stream，使下一段音频从零开始识别。
+    pub fn reset_context(&mut self) {
+        self.stream = self.recognizer.create_stream();
+        self.last_text.clear();
+        self.pending = None;
+        self.finished = false;
+    }
     pub fn new(config: &SherpaAsrConfig) -> Result<Self, AsrError> {
         for (name, path) in [
             ("encoder", &config.encoder),
@@ -120,6 +127,10 @@ impl StreamingAsr for SherpaAsr {
         }
         Ok(())
     }
+
+    fn reset(&mut self) {
+        self.reset_context();
+    }
 }
 
 /// sherpa-onnx silero-vad 配置。`silence_seconds` 决定"停顿多久算说完"，
@@ -156,6 +167,8 @@ pub struct SherpaVad {
     config: ResolvedVadConfig,
     /// 会话累计的全部音频（16kHz 单声道），用于按起止下标切片语音段。
     history: Vec<f32>,
+    /// 首个疑似语音采样的下标（尾段起点）。
+    speech_start: Option<usize>,
     /// 已取走的语音段总数（用于状态简化：一次会话只产出一个尾段）。
     emitted: bool,
     seen_speech: bool,
@@ -201,6 +214,7 @@ impl SherpaVad {
                 energy_threshold: config.energy_threshold,
             },
             history: Vec::new(),
+            speech_start: None,
             emitted: false,
             seen_speech: false,
         })
@@ -219,13 +233,20 @@ impl SherpaVad {
     }
 }
 
+/// 整块均为静音（逐样本低于能量门限）。
+fn non_speech_check(pcm: &[f32], threshold: f32) -> bool {
+    pcm.iter().all(|&s| s.abs() < threshold)
+}
+
 impl Vad for SherpaVad {
     fn accept_samples(&mut self, pcm: &[f32]) -> Result<(), AsrError> {
-        // 能量预筛：静音块直接累积历史，不经过模型推理。
-        // 这样静默环境下的 CPU 占用几乎为零，且推理只发生在疑似语音上。
-        if pcm.iter().all(|&s| s.abs() < self.config.energy_threshold) {
+        if non_speech_check(pcm, self.config.energy_threshold) {
+            // 纯静音块：仅累积历史（保持时间坐标对齐），不送模型推理。
             self.history.extend_from_slice(pcm);
             return Ok(());
+        }
+        if self.speech_start.is_none() {
+            self.speech_start = Some(self.history.len());
         }
         self.seen_speech = true;
         self.history.extend_from_slice(pcm);
@@ -237,27 +258,12 @@ impl Vad for SherpaVad {
         if self.emitted {
             return Ok(None);
         }
-        // 优先消费 silero 产出的完整语音段（长句中已确认结束的段）。
-        if !self.vad.is_empty() {
-            if let Some(seg) = self.vad.front() {
-                let start = seg.start() as usize;
-                let samples = seg.samples().to_vec();
-                self.vad.pop();
-                // 只产出第一段就结束本次会话（单句模式），后续音频属于下一句。
-                self.emitted = true;
-                return Ok(Some(SpeechSpan {
-                    start_sample: start,
-                    samples,
-                }));
-            }
-        }
-        // 尾段判定：出现过语音 + 尾部持续静音 → 冲刷剩余音频作为尾段。
+        // 尾段判定：出现过语音 + 尾部持续静音 → 冲刷语音段。
+        // 段范围 = 首个疑似语音采样 → 静音尾起点（后缀静音不送识别）。
         if self.seen_speech && self.tail_is_silent() {
             self.emitted = true;
-            // 取尾部：从最后一个语音活动点往前留一小段前导，
-            // 后缀静音块不送识别（节省时间）。
             let end = self.history.len().saturating_sub(self.config.silence_samples);
-            let start = end.saturating_sub(self.config.silence_samples / 2);
+            let start = self.speech_start.unwrap_or(0).min(end);
             return Ok(Some(SpeechSpan {
                 start_sample: start,
                 samples: self.history[start..end].to_vec(),

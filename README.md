@@ -61,8 +61,9 @@ voicetype run --engine sherpa --from-file test.wav --dry-run ...
 # 注入模式：paste（默认）| type | hybrid
 voicetype run --mode hybrid ...
 
-# 实时流式识别冒烟（与托盘同款管线，打印中间结果与定稿）
-voicetype realtime --seconds 5 --encoder ... --decoder ... --joiner ... --tokens ...
+# VAD 断句验证：WAV 驱动 VoiceSession（不传 --vad-model 则用 Mock 验证状态机）
+voicetype vad-session --from-file test.wav --vad-model models/silero_vad.onnx \
+  --encoder ... --decoder ... --joiner ... --tokens ...
 ```
 
 ## 三种文本注入策略（已实现并通过自动化验证）
@@ -88,6 +89,7 @@ voicetype realtime --seconds 5 --encoder ... --decoder ... --joiner ... --tokens
 - [x] 全局快捷键（F9）+ 托盘常驻 + 悬浮录音条（hybrid 流式上屏接入实时识别）
   - 已做：构建通过、启动后完整进入消息循环、CLI `realtime` 同款管线运行 4 秒无崩溃无死锁
   - 待你验证：有麦克风机器上按 F9 说中文，确认悬浮条出字、再按 F9 注入定稿
-- [ ] VAD 自动断句（sherpa-onnx 内置 silero-vad 可用）
+- [x] VAD 自动断句（silero-vad + VoiceSession 状态机，3 个单测 + 3 条真实音频验证；
+  说完停顿 0.8s 自动结束注入，按 F9 后 5 秒无语音自动取消）
 - [ ] 注入模式设置项与按应用配置
 - [ ] macOS（CGEvent Unicode 注入）/ Linux X11（XTest）支持；Wayland 不支持

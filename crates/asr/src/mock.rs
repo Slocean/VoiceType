@@ -34,6 +34,10 @@ impl StreamingAsr for MockAsr {
         });
         Ok(())
     }
+
+    fn reset(&mut self) {
+        self.pending = None;
+    }
 }
 
 /// 脚本化 Mock：每次 `accept_samples` 解锁一个预设结果（模拟识别随时间推进），
@@ -90,6 +94,10 @@ impl StreamingAsr for ScriptedAsr {
         });
         self.unlocked = 1;
         Ok(())
+    }
+
+    fn reset(&mut self) {
+        self.unlocked = 0;
     }
 }
 /// Mock VAD：累计 `trigger_after_samples` 个采样后即视为一句话结束，

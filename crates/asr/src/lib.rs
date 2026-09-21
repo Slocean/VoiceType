@@ -45,6 +45,8 @@ pub trait StreamingAsr: Send {
     fn take_result(&mut self) -> Result<Option<AsrResult>, AsrError>;
     /// 标记音频输入结束，引擎应产出最终定稿。
     fn finish(&mut self) -> Result<(), AsrError>;
+    /// 清空识别上下文（新语音段从头识别，防止跨段文本拼接污染）。
+    fn reset(&mut self);
 }
 
 /// 语音起止检测（VAD）输出的语音段。`start_sample` 是该段在
