@@ -1,4 +1,4 @@
-# VoiceType 模型一键下载脚本。
+﻿# VoiceType 模型一键下载脚本。
 # 用法：放到 exe 同目录执行，或 .\setup-models.ps1 -ModelsDir <目录>
 param([string]$ModelsDir = (Join-Path $PSScriptRoot "models"))
 $ErrorActionPreference = "Stop"

@@ -1,4 +1,4 @@
-# VoiceType Windows 打包脚本：release 构建 → 收集产物 → zip。
+﻿# VoiceType Windows 打包脚本：release 构建 → 收集产物 → zip。
 # 用法：.\scripts\package.ps1 [-OutDir dist] [-SkipBuild]
 param(
     [string]$OutDir = "dist",
