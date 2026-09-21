@@ -84,17 +84,32 @@ voicetype vad-session --from-file test.wav --vad-model models/silero_vad.onnx \
 ## 打包与分发
 
 ```bash
-# 本地打包（release 构建 → 收集产物 → zip）
-.\scripts\package.ps1            # 产物：dist\voicetype-win-x64.zip
-.\scripts\package.ps1 -SkipBuild # 跳过构建，仅重新收集
+# 本地打包（release 构建 → 便携版 zip + 裸 exe + 安装版 Inno Setup → 全部生成 .sha256）
+.\scripts\package.ps1                 # 产物在 dist\
+.\scripts\package.ps1 -SkipBuild      # 跳过构建，仅重新收集
+.\scripts\package.ps1 -SkipInstaller  # 跳过安装包（未装 Inno Setup 时）
 
 # GitHub Actions：推 v* tag 自动构建并发布 Release（也支持手动触发）
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.2.0 && git push origin v0.2.0
 ```
 
-发布包内容：`voicetype-tray.exe`（约 18MB，sherpa-onnx 静态链接）+
-`setup-models.ps1`（首次运行下载 ASR/VAD 模型到 models\）+ README。
-用户解压后先执行 `.\setup-models.ps1`，再启动 `voicetype-tray.exe`。
+Release 资产（全部附 `.sha256` 清单）：
+
+| 资产 | 说明 |
+| --- | --- |
+| `voicetype-win-x64-portable.zip` | **便携版**：解压即用，免安装 |
+| `voicetype-setup-x64.exe` | **安装版**：Inno Setup 向导，按用户安装到 `%LocalAppData%\VoiceType`（无需管理员），可选开机自启 |
+| `voicetype-tray.exe` | 裸 exe，便携版热更新的下载目标 |
+
+便携版使用：解压 → 执行 `.\setup-models.ps1` 下载模型 → 启动 `voicetype-tray.exe`。
+
+## 热更新与更新公告
+
+- **更新通道**：仓库根 [`app_update.json`](app_update.json) 是版本与更新公告的唯一事实来源，应用直读 main 分支（离线时回落到 exe 旁的本地副本）。
+- **检查更新**：托盘右键 → 「检查更新…」，发现新版自动下载并做 SHA-256 校验；「更新公告」随时查看通道最新公告。
+- **便携版热更**：替换 `voicetype-tray.exe` 后自动重启（参照 Nexuz 的 PowerShell 助手换文件方案）。
+- **安装版热更**：静默重装新版安装包（`/VERYSILENT /RESTARTAPPLICATIONS`）并自动拉起应用；安装版目录由 `install.mode` 标记区分。
+- **发版公告**：改 `app_update.json`（版本 + title + body）并 bump `apps/tray/Cargo.toml` 版本号，打 tag 推送；CI 用 `scripts/release_notes.py` 把该版本公告生成为 Release 正文。
 
 ## 路线图
 
@@ -106,6 +121,7 @@ git tag v0.1.0 && git push origin v0.1.0
   - 待你验证：有麦克风机器上按 F9 说中文，确认悬浮条出字、再按 F9 注入定稿
 - [x] VAD 自动断句（silero-vad + VoiceSession 状态机，3 个单测 + 3 条真实音频验证；
   说完停顿 0.8s 自动结束注入，按 F9 后 5 秒无语音自动取消）
-- [x] 打包：本地 package.ps1 + GitHub Actions（tag 触发自动 Release）
+- [x] 打包：便携版 zip + 安装版 Inno Setup + GitHub Actions（tag 触发自动 Release，全部资产带 SHA-256 清单）
+- [x] 应用内热更新（便携版换 exe / 安装版静默重装，双通道校验）+ 更新公告（app_update.json）
 - [ ] 注入模式设置项与按应用配置
 - [ ] macOS（CGEvent Unicode 注入）/ Linux X11（XTest）支持；Wayland 不支持

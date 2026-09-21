@@ -203,6 +203,15 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     item(MENU_MODE_HYBRID, "混合模式（流式）", mode == InjectMode::Hybrid);
     let sep = wide("");
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR(sep.as_ptr()));
+    // 置灰的版本行，方便确认热更后的实际版本。
+    {
+        let text = wide(&format!("当前版本 v{}", updater::APP_VERSION));
+        let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, PCWSTR(text.as_ptr()));
+    }
+    item(MENU_UPDATE_CHECK, "检查更新…", false);
+    item(MENU_ANNOUNCEMENT, "更新公告", false);
+    let sep = wide("");
+    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR(sep.as_ptr()));
     let quit = wide("退出");
     let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT as usize, PCWSTR(quit.as_ptr()));
 
@@ -232,10 +241,63 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         MENU_MODE_HYBRID => {
             with_app(|app| app.mode = InjectMode::Hybrid);
         }
+        MENU_UPDATE_CHECK => {
+            set_window_text(
+                overlay_text_of(hwnd),
+                &format!("检查更新中…（当前 v{}）", updater::APP_VERSION),
+            );
+            updater::spawn_check_and_download(hwnd.0 as isize);
+        }
+        MENU_ANNOUNCEMENT => {
+            updater::spawn_fetch_announcement(hwnd.0 as isize);
+        }
         MENU_QUIT => {
             let _ = DestroyWindow(hwnd);
         }
         _ => {}
+    }
+}
+
+fn overlay_text_of(hwnd: HWND) -> HWND {
+    with_app(|app| app.overlay_text).unwrap_or(hwnd)
+}
+
+/// 更新后台任务完成：弹出结果 / 询问是否立即重启应用。
+fn handle_update_event(hwnd: HWND) {
+    let Some(ev) = updater::take_update_event() else { return };
+    unsafe {
+        let title = wide(if ev.ok { "VoiceType 更新" } else { "VoiceType 更新失败" });
+        let text = wide(&ev.text);
+        let flags = if ev.ready {
+            MB_ICONINFORMATION | MB_YESNO
+        } else if ev.ok {
+            MB_ICONINFORMATION
+        } else {
+            MB_ICONWARNING
+        };
+        let choice = MessageBoxW(
+            Some(hwnd),
+            PCWSTR(text.as_ptr()),
+            PCWSTR(title.as_ptr()),
+            flags,
+        );
+        if ev.ready && choice == IDYES {
+            // 助手已拉起：等本进程退出后（便携）换 exe 重启 /（安装版）静默重装。
+            match updater::apply_update_and_restart() {
+                Ok(()) => {
+                    let _ = DestroyWindow(hwnd);
+                }
+                Err(e) => {
+                    let t = wide(&format!("应用更新失败：{e}"));
+                    let _ = MessageBoxW(
+                        Some(hwnd),
+                        PCWSTR(t.as_ptr()),
+                        PCWSTR(title.as_ptr()),
+                        MB_ICONWARNING,
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -251,6 +313,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_WORKER_EVENT => {
             drain_worker_events();
+            LRESULT(0)
+        }
+        WM_UPDATE_EVENT => {
+            handle_update_event(hwnd);
             LRESULT(0)
         }
         WM_TRAY_CALLBACK => {

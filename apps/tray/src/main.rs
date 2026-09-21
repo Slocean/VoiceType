@@ -31,6 +31,7 @@ mod worker;
 use worker::start_worker;
 
 mod ui_main;
+mod updater;
 
 // ---------- 入口 ----------
 
@@ -42,12 +43,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 const WM_WORKER_EVENT: u32 = WM_APP + 2;
+/// 更新后台任务（检查/下载/公告）完成事件。
+const WM_UPDATE_EVENT: u32 = WM_APP + 3;
 const HOTKEY_ID: i32 = 1;
 const TRAY_UID: u32 = 1;
 
 const MENU_MODE_PASTE: i32 = 1001;
 const MENU_MODE_TYPE: i32 = 1002;
 const MENU_MODE_HYBRID: i32 = 1003;
+const MENU_UPDATE_CHECK: i32 = 1005;
+const MENU_ANNOUNCEMENT: i32 = 1006;
 const MENU_QUIT: i32 = 1004;
 
 const OVERLAY_W: i32 = 520;

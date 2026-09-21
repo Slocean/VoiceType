@@ -1,6 +1,6 @@
 [package]
 name = "voicetype-tray"
-version = "0.1.0"
+version = "0.2.0"
 edition.workspace = true
 license.workspace = true
 description = "VoiceType 托盘常驻应用：F9 全局热键录音，实时识别并注入当前焦点窗口"
@@ -13,6 +13,11 @@ path = "src/main.rs"
 voicetype-audio = { path = "../../crates/audio" }
 voicetype-asr = { path = "../../crates/asr", features = ["sherpa"] }
 voicetype-inject = { path = "../../crates/inject" }
+# 热更新：HTTP(S) 拉取更新通道与 Release 资产 + SHA-256 校验 + 通道 JSON 解析。
+ureq = { version = "2", default-features = false, features = ["tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
