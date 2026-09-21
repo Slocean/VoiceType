@@ -1,7 +1,18 @@
 ﻿# VoiceType 模型一键下载脚本。
-# 用法：放到 exe 同目录执行，或 .\setup-models.ps1 -ModelsDir <目录>
-param([string]$ModelsDir = (Join-Path $PSScriptRoot "models"))
+# 用法：.\setup-models.ps1 [-ModelsDir <目录>]
+# 默认模型目录：脚本所在目录的 models\（打包布局）；
+# 若上级目录已有 models\（仓库布局）则优先使用之。
+param([string]$ModelsDir = "")
 $ErrorActionPreference = "Stop"
+
+if ($ModelsDir -eq "") {
+    $repoModels = Join-Path (Split-Path $PSScriptRoot -Parent) "models"
+    if (Test-Path $repoModels) {
+        $ModelsDir = $repoModels
+    } else {
+        $ModelsDir = Join-Path $PSScriptRoot "models"
+    }
+}
 
 $VadUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
 $ZhName = "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23"

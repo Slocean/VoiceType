@@ -81,6 +81,21 @@ voicetype vad-session --from-file test.wav --vad-model models/silero_vad.onnx \
 从 https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models 下载，
 解压到 `models/` 即可）。
 
+## 打包与分发
+
+```bash
+# 本地打包（release 构建 → 收集产物 → zip）
+.\scripts\package.ps1            # 产物：dist\voicetype-win-x64.zip
+.\scripts\package.ps1 -SkipBuild # 跳过构建，仅重新收集
+
+# GitHub Actions：推 v* tag 自动构建并发布 Release（也支持手动触发）
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+发布包内容：`voicetype-tray.exe`（约 18MB，sherpa-onnx 静态链接）+
+`setup-models.ps1`（首次运行下载 ASR/VAD 模型到 models\）+ README。
+用户解压后先执行 `.\setup-models.ps1`，再启动 `voicetype-tray.exe`。
+
 ## 路线图
 
 - [x] 文本注入层（paste / type / hybrid 三策略并行，自动化自测通过）
@@ -91,5 +106,6 @@ voicetype vad-session --from-file test.wav --vad-model models/silero_vad.onnx \
   - 待你验证：有麦克风机器上按 F9 说中文，确认悬浮条出字、再按 F9 注入定稿
 - [x] VAD 自动断句（silero-vad + VoiceSession 状态机，3 个单测 + 3 条真实音频验证；
   说完停顿 0.8s 自动结束注入，按 F9 后 5 秒无语音自动取消）
+- [x] 打包：本地 package.ps1 + GitHub Actions（tag 触发自动 Release）
 - [ ] 注入模式设置项与按应用配置
 - [ ] macOS（CGEvent Unicode 注入）/ Linux X11（XTest）支持；Wayland 不支持

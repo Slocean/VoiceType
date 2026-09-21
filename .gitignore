@@ -3,3 +3,5 @@
 *.wav
 *.log
 scripts/models/
+
+dist/
