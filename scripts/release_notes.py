@@ -8,6 +8,11 @@ import json
 import sys
 from pathlib import Path
 
+# Windows 控制台默认 cp1252/GBK，直接 print 中文会 UnicodeEncodeError。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 CHANNEL = Path(__file__).resolve().parent.parent / "app_update.json"
 
 
