@@ -42,6 +42,24 @@ enum Command {
         #[arg(long)]
         tokens: Option<PathBuf>,
     },
+    /// VAD 断句验证：用 WAV 文件驱动 VoiceSession（MockVAD+脚本ASR 或
+    /// SherpaVad+SherpaAsr），打印会话事件序列，用于验证状态机与尾段切分
+    VadSession {
+        /// 输入 WAV（16kHz 单声道最佳，其他格式自动转换）
+        #[arg(long)]
+        from_file: PathBuf,
+        #[arg(long)]
+        encoder: Option<PathBuf>,
+        #[arg(long)]
+        decoder: Option<PathBuf>,
+        #[arg(long)]
+        joiner: Option<PathBuf>,
+        #[arg(long)]
+        tokens: Option<PathBuf>,
+        /// VAD 模型（不传则用 MockVad + MockAsr 验证状态机骨架）
+        #[arg(long)]
+        vad_model: Option<PathBuf>,
+    },
     /// 录音 N 秒，输出统计并保存 WAV
     Record {
         #[arg(long, default_value = "3")]

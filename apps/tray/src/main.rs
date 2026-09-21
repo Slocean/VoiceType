@@ -13,11 +13,9 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use voicetype_asr::{SherpaAsr, SherpaAsrConfig, StreamingAsr};
-use voicetype_audio::AudioStream;
+use voicetype_asr::SherpaAsrConfig;
 use voicetype_inject::{
     ClipboardInjector, HybridInjector, StreamingInjector, TextInjector, TypingInjector,
 };
@@ -25,11 +23,20 @@ use voicetype_inject::{
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::Input::KeyboardAndMouse::{
-    RegisterHotKey, UnregisterHotKey, MOD_NOREPEAT, VK_F9,
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::{MOD_NOREPEAT, VK_F9};
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
+
+mod worker;
+use worker::start_worker;
+
+mod ui_main;
+
+// ---------- 入口 ----------
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    ui_main::run()
+}
 
 // ---------- 常量 ----------
 
@@ -57,9 +64,12 @@ enum Cmd {
     Stop,
 }
 
+#[allow(dead_code)]
 enum Ev {
     Interim(String),
     Final(String),
+    /// VAD 断句但无语音内容（静默会话），上层静默收尾。
+    Empty,
     Error(String),
 }
 
@@ -150,387 +160,17 @@ fn find_model_files(dir: &Path) -> Option<SherpaAsrConfig> {
     })
 }
 
-// ---------- Worker：录音 + 识别 ----------
-
-fn start_worker(notify: NotifyHwnd) -> Result<(Sender<Cmd>, Receiver<Ev>, JoinHandle<()>), String> {
-    let model_dir = std::env::var("VOICETYPE_MODEL_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(DEFAULT_MODEL_DIR));
-    let model_cfg = find_model_files(&model_dir)
-        .ok_or_else(|| format!("模型文件缺失，请检查目录: {}", model_dir.display()))?;
-
-    let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
-    let (ev_tx, ev_rx) = mpsc::channel::<Ev>();
-
-    let handle = std::thread::spawn(move || {
-        let asr = match SherpaAsr::new(&model_cfg) {
-            Ok(a) => Arc::new(Mutex::new(a)),
-            Err(e) => {
-                let _ = ev_tx.send(Ev::Error(format!("识别引擎初始化失败: {e}")));
-                notify.post(WM_WORKER_EVENT);
-                return;
-            }
-        };
-
-        let asr_in_cb = Arc::clone(&asr);
-        let ev_in_cb = ev_tx.clone();
-        let stream = AudioStream::start(move |chunk| {
-            if let Ok(mut engine) = asr_in_cb.lock() {
-                if engine.accept_samples(chunk).is_ok() {
-                    while let Ok(Some(r)) = engine.take_result() {
-                        let _ = ev_in_cb.send(Ev::Interim(r.text));
-                        notify.post(WM_WORKER_EVENT);
-                    }
-                }
-            }
-        });
-        let stream = match stream {
-            Ok(s) => s,
-            Err(e) => {
-                let _ = ev_tx.send(Ev::Error(format!("打开麦克风失败: {e}")));
-                notify.post(WM_WORKER_EVENT);
-                return;
-            }
-        };
-
-        // 阻塞等待停止命令，之后收尾产出定稿。
-        let _ = cmd_rx.recv();
-        drop(stream);
-        if let Ok(mut engine) = asr.lock() {
-            let _ = engine.finish();
-            let mut text = String::new();
-            while let Ok(Some(r)) = engine.take_result() {
-                text = r.text;
-            }
-            let _ = ev_tx.send(Ev::Final(text));
-            notify.post(WM_WORKER_EVENT);
-        };
-    });
-
-    Ok((cmd_tx, ev_rx, handle))
+/// 在模型目录内定位 VAD 模型（silero_vad.onnx）。
+fn find_vad_model(model_dir: &Path) -> Option<PathBuf> {
+    for name in ["silero_vad.onnx", "vad.onnx"] {
+        let p = model_dir.join(name);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    None
 }
 
 // ---------- 录音开关与事件处理（主线程） ----------
 
-fn toggle_recording(main_hwnd: HWND) {
-    with_app(|app| {
-        if app.recording {
-            // 结束录音：通知 worker 收尾，定稿经 Ev::Final 异步回来。
-            if let Some(tx) = app.cmd_tx.take() {
-                let _ = tx.send(Cmd::Stop);
-            }
-            set_window_text(app.overlay_text, "识别中…");
-        } else {
-            match start_worker(NotifyHwnd(main_hwnd)) {
-                Ok((tx, rx, handle)) => {
-                    app.cmd_tx = Some(tx);
-                    app.ev_rx = Some(rx);
-                    app.worker = Some(handle);
-                    app.recording = true;
-                    set_window_text(app.overlay_text, "🎤 录音中…（按 F9 结束）");
-                    unsafe {
-                        let _ = ShowWindow(app.overlay, SW_SHOW);
-                    }
-                }
-                Err(e) => {
-                    set_window_text(app.overlay_text, &format!("启动失败: {e}"));
-                    unsafe {
-                        let _ = ShowWindow(app.overlay, SW_SHOW);
-                    }
-                }
-            }
-        }
-    });
-}
-
-fn drain_worker_events() {
-    // 先收集事件再处理，避免在持锁回调里嵌套操作 App。
-    let events: Vec<Ev> = with_app(|app| {
-        let mut out = Vec::new();
-        if let Some(rx) = &app.ev_rx {
-            while let Ok(ev) = rx.try_recv() {
-                out.push(ev);
-            }
-        }
-        out
-    })
-    .unwrap_or_default();
-
-    for ev in events {
-        match ev {
-            Ev::Interim(text) => {
-                with_app(|app| {
-                    if !app.recording {
-                        return;
-                    }
-                    set_window_text(app.overlay_text, &format!("🎤 {text}"));
-                    if app.mode == InjectMode::Hybrid {
-                        let _ = app.hybrid.update_interim(&text);
-                    }
-                });
-            }
-            Ev::Final(text) => {
-                with_app(|app| {
-                    app.recording = false;
-                    app.ev_rx = None;
-                    if let Some(h) = app.worker.take() {
-                        let _ = h.join();
-                    }
-                    unsafe {
-                        let _ = ShowWindow(app.overlay, SW_HIDE);
-                    }
-                    match app.mode {
-                        InjectMode::Paste => {
-                            let _ = ClipboardInjector::default().inject(&text);
-                        }
-                        InjectMode::Type => {
-                            let _ = TypingInjector::default().inject(&text);
-                        }
-                        InjectMode::Hybrid => {
-                            let _ = if text.is_empty() {
-                                app.hybrid.cancel()
-                            } else {
-                                app.hybrid.commit(&text)
-                            };
-                        }
-                    }
-                });
-            }
-            Ev::Error(msg) => {
-                with_app(|app| {
-                    app.recording = false;
-                    app.ev_rx = None;
-                    if let Some(h) = app.worker.take() {
-                        let _ = h.join();
-                    }
-                    let _ = app.hybrid.cancel();
-                    set_window_text(app.overlay_text, &format!("⚠ {msg}"));
-                });
-            }
-        }
-    }
-}
-
-// ---------- 托盘 ----------
-
-unsafe fn add_tray_icon(hwnd: HWND) {
-    let icon = LoadIconW(None, IDI_APPLICATION).unwrap_or_default();
-    let mut data = NOTIFYICONDATAW {
-        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
-        hWnd: hwnd,
-        uID: TRAY_UID,
-        uFlags: NIF_MESSAGE | NIF_ICON | NIF_TIP,
-        uCallbackMessage: WM_TRAY_CALLBACK,
-        hIcon: icon,
-        ..Default::default()
-    };
-    let tip = wide("VoiceType 语音输入（F9 开始/停止）");
-    data.szTip[..tip.len() - 1].copy_from_slice(&tip[..tip.len() - 1]);
-    let _ = Shell_NotifyIconW(NIM_ADD, &data);
-}
-
-unsafe fn remove_tray_icon(hwnd: HWND) {
-    let data = NOTIFYICONDATAW {
-        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
-        hWnd: hwnd,
-        uID: TRAY_UID,
-        ..Default::default()
-    };
-    let _ = Shell_NotifyIconW(NIM_DELETE, &data);
-}
-
-unsafe fn show_tray_menu(hwnd: HWND) {
-    let mode = with_app(|app| app.mode).unwrap_or(InjectMode::Hybrid);
-    let Ok(menu) = CreatePopupMenu() else { return };
-    let item = |id: i32, label: &str, checked: bool| {
-        let flags = if checked { MF_STRING | MF_CHECKED } else { MF_STRING };
-        let text = wide(label);
-        let _ = AppendMenuW(menu, flags, id as usize, PCWSTR(text.as_ptr()));
-    };
-    item(MENU_MODE_PASTE, "粘贴模式", mode == InjectMode::Paste);
-    item(MENU_MODE_TYPE, "键入模式", mode == InjectMode::Type);
-    item(MENU_MODE_HYBRID, "混合模式（流式）", mode == InjectMode::Hybrid);
-    let sep = wide("");
-    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR(sep.as_ptr()));
-    let quit = wide("退出");
-    let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT as usize, PCWSTR(quit.as_ptr()));
-
-    let mut pt = POINT::default();
-    let _ = GetCursorPos(&mut pt);
-    // TrackPopupMenu 要求窗口在前台，否则点击菜单外区域不收起菜单。
-    let _ = SetForegroundWindow(hwnd);
-    // TPM_RETURNCMD：返回值即菜单项 id（0 表示取消），不走 WM_COMMAND。
-    let ret = TrackPopupMenu(
-        menu,
-        TPM_RETURNCMD | TPM_NONOTIFY | TPM_RIGHTBUTTON,
-        pt.x,
-        pt.y,
-        Some(0),
-        hwnd,
-        None,
-    );
-    let _ = DestroyMenu(menu);
-
-    match ret.0 {
-        MENU_MODE_PASTE => {
-            with_app(|app| app.mode = InjectMode::Paste);
-        }
-        MENU_MODE_TYPE => {
-            with_app(|app| app.mode = InjectMode::Type);
-        }
-        MENU_MODE_HYBRID => {
-            with_app(|app| app.mode = InjectMode::Hybrid);
-        }
-        MENU_QUIT => {
-            let _ = DestroyWindow(hwnd);
-        }
-        _ => {}
-    }
-}
-
-// ---------- 窗口过程 ----------
-
-unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    match msg {
-        WM_HOTKEY => {
-            if wparam.0 as i32 == HOTKEY_ID {
-                toggle_recording(hwnd);
-            }
-            LRESULT(0)
-        }
-        WM_WORKER_EVENT => {
-            drain_worker_events();
-            LRESULT(0)
-        }
-        WM_TRAY_CALLBACK => {
-            let mouse = (lparam.0 as u32) & 0xFFFF;
-            if mouse == WM_RBUTTONUP {
-                show_tray_menu(hwnd);
-            } else if mouse == WM_LBUTTONDBLCLK {
-                toggle_recording(hwnd);
-            }
-            LRESULT(0)
-        }
-        WM_DESTROY => {
-            // 退出前收尾：移除托盘、停掉进行中的录音。
-            remove_tray_icon(hwnd);
-            let _ = UnregisterHotKey(None, HOTKEY_ID);
-            with_app(|app| {
-                if app.recording {
-                    if let Some(tx) = app.cmd_tx.take() {
-                        let _ = tx.send(Cmd::Stop);
-                    }
-                    if let Some(h) = app.worker.take() {
-                        let _ = h.join();
-                    }
-                }
-            });
-            PostQuitMessage(0);
-            LRESULT(0)
-        }
-        _ => DefWindowProcW(hwnd, msg, wparam, lparam),
-    }
-}
-
-// ---------- 入口 ----------
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    unsafe {
-        let hinst: HINSTANCE = GetModuleHandleW(None)?.into();
-
-
-        // 主窗口：隐藏的消息窗口（热键/托盘回调的载体）。
-        let class = w!("VoiceTypeMainWindow");
-        let wc = WNDCLASSW {
-            lpfnWndProc: Some(wndproc),
-            hInstance: hinst,
-            lpszClassName: class,
-            ..Default::default()
-        };
-        RegisterClassW(&wc);
-
-
-
-        let hwnd = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            class,
-            w!("VoiceType"),
-            WINDOW_STYLE(0),
-            0,
-            0,
-            0,
-            0,
-            None,
-            None,
-            Some(hinst),
-            None,
-        )?;
-
-        // 悬浮条：topmost + toolwindow + noactivate，不抢目标应用焦点。
-        let overlay_class = w!("VoiceTypeOverlay");
-        let wc2 = WNDCLASSW {
-            lpfnWndProc: Some(wndproc),
-            hInstance: hinst,
-            lpszClassName: overlay_class,
-            ..Default::default()
-        };
-        RegisterClassW(&wc2);
-
-
-        let screen_w = GetSystemMetrics(SM_CXSCREEN);
-        let screen_h = GetSystemMetrics(SM_CYSCREEN);
-        let overlay = CreateWindowExW(
-            WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
-            overlay_class,
-            w!("VoiceType"),
-            WS_POPUP,
-            (screen_w - OVERLAY_W) / 2,
-            screen_h - OVERLAY_H - 120,
-            OVERLAY_W,
-            OVERLAY_H,
-            None,
-            None,
-            Some(hinst),
-            None,
-        )?;
-        let overlay_text = CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            w!("STATIC"),
-            w!("VoiceType 就绪"),
-            WINDOW_STYLE(WS_CHILD.0 | WS_VISIBLE.0 | SS_CENTER_TEXT),
-            0,
-            0,
-            OVERLAY_W,
-            OVERLAY_H,
-            Some(overlay),
-            None,
-            Some(hinst),
-            None,
-        )?;
-
-        APP.with(|a| {
-            *a.borrow_mut() = Some(App {
-                mode: InjectMode::Hybrid,
-                recording: false,
-                cmd_tx: None,
-                ev_rx: None,
-                worker: None,
-                overlay,
-                overlay_text,
-                hybrid: HybridInjector::default(),
-            });
-        });
-
-
-        RegisterHotKey(Some(hwnd), HOTKEY_ID, MOD_NOREPEAT, VK_F9.0 as u32)?;
-        add_tray_icon(hwnd);
-
-
-        let mut msg = MSG::default();
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
-            let _ = TranslateMessage(&msg);
-            DispatchMessageW(&msg);
-        }
-    }
-    Ok(())
-}
+// ---------- 录音开关与事件处理（主线程，见 ui_main） ----------

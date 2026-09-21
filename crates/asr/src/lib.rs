@@ -1,14 +1,21 @@
 //! ASR 引擎抽象层。
 //!
-//! 转写引擎通过 [`StreamingAsr`] trait 接入，上层（录音/注入编排）不依赖
-//! 具体引擎。实现：
-//! - [`MockAsr`]：无模型，返回固定文本，用于链路验证。
-//! - [`SherpaAsr`]（feature `sherpa`）：sherpa-onnx 本地流式识别。
+//! 转写引擎通过 [`StreamingAsr`] trait 接入，语音断句通过 [`Vad`] trait 接入，
+//! 上层（录音/注入编排）不依赖具体引擎。实现：
+//! - [`MockAsr`] / [`MockVad`]：无模型，链路验证用。
+//! - [`SherpaAsr`] / [`SherpaVad`]（feature `sherpa`）：
+//!   sherpa-onnx 本地流式识别与 silero-vad。
 
 #[cfg(feature = "sherpa")]
 mod sherpa;
 #[cfg(feature = "sherpa")]
-pub use sherpa::{SherpaAsr, SherpaAsrConfig};
+pub use sherpa::{SherpaAsr, SherpaAsrConfig, SherpaVad, SherpaVadConfig};
+
+mod mock;
+pub use mock::{MockAsr, MockVad, ScriptedAsr};
+
+mod session;
+pub use session::{Utterance, VoiceSession};
 
 #[derive(Debug, thiserror::Error)]
 pub enum AsrError {
@@ -40,36 +47,27 @@ pub trait StreamingAsr: Send {
     fn finish(&mut self) -> Result<(), AsrError>;
 }
 
-/// Mock 引擎：不接音频模型，`finish` 时返回固定文本。
-/// 用于在没有模型文件的情况下验证全链路时序。
-pub struct MockAsr {
-    final_text: String,
-    pending: Option<AsrResult>,
+/// 语音起止检测（VAD）输出的语音段。`start_sample` 是该段在
+/// 本次会话累计音频中的起始采样下标，`samples` 为该段 PCM。
+#[derive(Debug, Clone)]
+pub struct SpeechSpan {
+    pub start_sample: usize,
+    pub samples: Vec<f32>,
 }
 
-impl MockAsr {
-    pub fn new(final_text: impl Into<String>) -> Self {
-        Self {
-            final_text: final_text.into(),
-            pending: None,
-        }
-    }
-}
-
-impl StreamingAsr for MockAsr {
-    fn accept_samples(&mut self, _pcm: &[f32]) -> Result<(), AsrError> {
-        Ok(())
-    }
-
-    fn take_result(&mut self) -> Result<Option<AsrResult>, AsrError> {
-        Ok(self.pending.take())
-    }
-
-    fn finish(&mut self) -> Result<(), AsrError> {
-        self.pending = Some(AsrResult {
-            text: self.final_text.clone(),
-            is_final: true,
-        });
-        Ok(())
-    }
+/// VAD 抽象：把持续音频流切成"一段句话"。实现负责内部缓冲，
+/// 上层只管喂音频、取语音段。
+///
+/// 要求 Send：与 [`StreamingAsr`] 同理，常被音频回调线程持有。
+pub trait Vad: Send {
+    /// 喂入一段 PCM 音频。
+    fn accept_samples(&mut self, pcm_16k_mono: &[f32]) -> Result<(), AsrError>;
+    /// 取出当前可用的完整语音段；没有完整段时返回 None。
+    /// 当连续静音超过 `silence_timeout_samples` 且其间出现过语音时，
+    /// 返回冲刷出的尾段并由上层结束本次会话。
+    fn take_segment(&mut self) -> Result<Option<SpeechSpan>, AsrError>;
+    /// 本次会话累计的音频采样数（16kHz 单声道坐标）。
+    fn total_samples(&self) -> usize;
+    /// 最近喂入的音频是否超过静音阈值（用于静默会话不触发任何动作）。
+    fn seen_speech(&self) -> bool;
 }
