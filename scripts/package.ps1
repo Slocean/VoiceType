@@ -68,7 +68,9 @@ if (-not $SkipInstaller) {
         $assets += (Join-Path $OutDir "voicetype-setup-x64.exe")
         if ($WithModels) {
             Write-Host "生成带模型安装包…"
-            & $iscc "/DAppVersion=$version" "/DModelsDir=$modelsStage" scripts\installer.iss
+            # ISCC 会把相对路径解析到 .iss 所在目录，这里必须传绝对路径。
+            $modelsAbs = [System.IO.Path]::GetFullPath($modelsStage)
+            & $iscc "/DAppVersion=$version" "/DModelsDir=$modelsAbs" scripts\installer.iss
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             $assets += (Join-Path $OutDir "voicetype-setup-x64-with-models.exe")
         }
