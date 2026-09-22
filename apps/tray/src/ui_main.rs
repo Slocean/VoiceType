@@ -4,7 +4,7 @@
 //! drain_worker_events 串行消费。录音启停逻辑见 toggle_recording。
 
 use super::*;
-use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotKey};
+use windows::Win32::UI::Input::KeyboardAndMouse::{HOT_KEY_MODIFIERS, RegisterHotKey, UnregisterHotKey};
 
 // ---------- 录音开关与事件处理 ----------
 
@@ -213,7 +213,8 @@ unsafe fn add_tray_icon(hwnd: HWND) {
         hIcon: icon,
         ..Default::default()
     };
-    let tip = wide("VoiceType 语音输入（F9 开始，停顿自动结束）");
+    let name = with_app(|app| app.hotkey_name.clone()).unwrap_or_else(|| "F9".into());
+    let tip = wide(&format!("VoiceType 语音输入（按 {name} 开始，停顿自动结束）"));
     data.szTip[..tip.len() - 1].copy_from_slice(&tip[..tip.len() - 1]);
     let _ = Shell_NotifyIconW(NIM_ADD, &data);
 }
@@ -341,11 +342,54 @@ fn overlay_text_of(hwnd: HWND) -> HWND {
     with_app(|app| app.overlay_text).unwrap_or(hwnd)
 }
 
-/// 悬浮条就绪态文案（常驻显示）。
-const IDLE_TEXT: &str = "🎤 就绪 — 按 F9 开始说话";
+/// 应用新的录音热键：先注销旧的，注册成功才更新状态与托盘提示；
+/// 失败（冲突/被占用）时回退注册原热键，返回 false 供 UI 提示。
+pub fn apply_new_hotkey(hwnd: HWND, vk: u32, mods: u32) -> bool {
+    unsafe {
+        let _ = UnregisterHotKey(None, HOTKEY_ID);
+        if RegisterHotKey(Some(hwnd), HOTKEY_ID, HOT_KEY_MODIFIERS(mods | MOD_NOREPEAT.0), vk).is_ok() {
+            with_app(|app| {
+                app.hotkey_vk = vk;
+                app.hotkey_mods = mods;
+                app.hotkey_name = settings::combo_text(vk, mods);
+            });
+            update_tray_tip(hwnd);
+            true
+        } else {
+            let (ovk, omods) =
+                with_app(|app| (app.hotkey_vk, app.hotkey_mods)).unwrap_or((0x78, 0));
+            let _ = RegisterHotKey(
+                Some(hwnd),
+                HOTKEY_ID,
+                HOT_KEY_MODIFIERS(omods | MOD_NOREPEAT.0),
+                ovk,
+            );
+            false
+        }
+    }
+}
+
+/// 托盘气泡提示跟随当前热键。
+fn update_tray_tip(hwnd: HWND) {
+    let name = with_app(|app| app.hotkey_name.clone()).unwrap_or_default();
+    let mut data = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: TRAY_UID,
+        uFlags: NIF_TIP,
+        ..Default::default()
+    };
+    let tip = wide(&format!("VoiceType 语音输入（按 {name} 开始，停顿自动结束）"));
+    let n = tip.len().min(data.szTip.len());
+    data.szTip[..n].copy_from_slice(&tip[..n]);
+    unsafe {
+        let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
+    }
+}
 
 fn set_overlay_idle(overlay_text: HWND) {
-    set_window_text(overlay_text, IDLE_TEXT);
+    let name = with_app(|app| app.hotkey_name.clone()).unwrap_or_default();
+    set_window_text(overlay_text, &format!("🎤 就绪 — 按 {name} 开始说话"));
 }
 
 /// 模型下载后台任务：进度刷新悬浮条文本；结束时收起悬浮条、刷新主界面并弹窗。
@@ -356,7 +400,7 @@ fn handle_model_event(hwnd: HWND) {
         settings::update_model_progress(ev.percent, &ev.text);
         return;
     }
-    set_window_text(overlay_text_of(hwnd), IDLE_TEXT);
+    set_overlay_idle(overlay_text_of(hwnd));
     settings::refresh_model_status();
     unsafe {
         let title = wide(if ev.ok { "VoiceType 模型" } else { "VoiceType 模型下载失败" });
@@ -572,13 +616,29 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 overlay_text,
                 hybrid: HybridInjector::default(),
                 settings: HWND::default(),
+                hotkey_vk: 0x78,
+                hotkey_mods: 0,
+                hotkey_name: "F9".to_string(),
             });
         });
 
+        // 加载用户自定义热键（默认 F9），注册失败时提示不退出。
+        let (hotkey_vk, hotkey_mods) = settings::load_hotkey();
+        let hotkey_name = settings::combo_text(hotkey_vk, hotkey_mods);
+        with_app(|app| {
+            app.hotkey_vk = hotkey_vk;
+            app.hotkey_mods = hotkey_mods;
+            app.hotkey_name = hotkey_name.clone();
+        });
         // 热键被其他应用占用时不静默退出——托盘应用没了图标用户找不着北。
-        if let Err(e) = RegisterHotKey(Some(hwnd), HOTKEY_ID, MOD_NOREPEAT, VK_F9.0 as u32) {
+        if let Err(e) = RegisterHotKey(
+            Some(hwnd),
+            HOTKEY_ID,
+            HOT_KEY_MODIFIERS(hotkey_mods | MOD_NOREPEAT.0),
+            hotkey_vk,
+        ) {
             let text = wide(&format!(
-                "F9 全局热键注册失败（可能被其他应用占用）：{e}\n\nVoiceType 将继续在托盘运行，可稍后重启本应用重试。"
+                "全局热键注册失败（可能被其他应用占用）：{e}\n\nVoiceType 将继续在托盘运行，可在主界面重新设置快捷键。"
             ));
             let title = wide("VoiceType");
             let _ = MessageBoxW(
@@ -590,7 +650,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         add_tray_icon(hwnd);
         // 悬浮条常驻：就绪态常显，录音时显示识别文本。
-        set_window_text(overlay_text, IDLE_TEXT);
+        set_window_text(overlay_text, &format!("🎤 就绪 — 按 {} 开始说话", hotkey_name));
         let _ = ShowWindow(overlay, SW_SHOW);
         // 首次使用（模型未就绪）时直接打开主界面引导下载，同时冒泡提示托盘位置。
         if !models_dl::models_ready() {

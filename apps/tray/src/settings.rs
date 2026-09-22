@@ -7,9 +7,11 @@
 use super::*;
 use windows::Win32::Foundation::WIN32_ERROR;
 use windows::Win32::Graphics::Gdi::{GetStockObject, GetSysColorBrush, DEFAULT_GUI_FONT, HGDIOBJ, SYS_COLOR_INDEX};
+use windows::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VSC};
+use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
-    HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_SZ,
+    HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_DWORD, REG_SZ, REG_VALUE_TYPE,
 };
 
 // ---------- 控件 ID ----------
@@ -31,6 +33,10 @@ const IDC_GROUP_MODE: i32 = 2020;
 const IDC_GROUP_MODEL: i32 = 2021;
 const IDC_GROUP_UPDATE: i32 = 2022;
 const IDC_TAB: i32 = 2030;
+const IDC_HOTKEY: i32 = 2040;
+const IDC_BTN_APPLY_HOTKEY: i32 = 2041;
+const IDC_HOTKEY_NOW: i32 = 2042;
+const IDC_GROUP_HOTKEY: i32 = 2043;
 
 // 原始样式/消息常量（windows crate 已启用 feature 下未导出）。
 const BS_GROUPBOX_RAW: u32 = 0x7;
@@ -53,11 +59,18 @@ const TCN_SELCHANGE: i32 = -551;
 const PBM_SETRANGE32: u32 = 0x0406;
 const PBM_SETPOS: u32 = 0x0402;
 const PBM_SETMARQUEE: u32 = 0x040A;
+const HKM_SETHOTKEY: u32 = 0x0401;
+const HKM_GETHOTKEY: u32 = 0x0402;
+// 热键控件的修饰键标志（HOTKEYF_*，与 MOD_* 编码不同需转换）。
+const HOTKEYF_SHIFT: u32 = 0x1;
+const HOTKEYF_CONTROL: u32 = 0x2;
+const HOTKEYF_ALT: u32 = 0x4;
 
 /// 两页各自包含的控件（切 tab 时整组显隐）。
 const PAGE_FUNCTION: &[i32] = &[
     IDC_GROUP_MODE, IDC_MODE_PASTE, IDC_MODE_TYPE, IDC_MODE_HYBRID,
     IDC_GROUP_MODEL, IDC_MODEL_STATUS, IDC_BTN_DOWNLOAD, IDC_PROGRESS,
+    IDC_GROUP_HOTKEY, IDC_HOTKEY, IDC_BTN_APPLY_HOTKEY, IDC_HOTKEY_NOW,
     IDC_AUTOSTART, IDC_HINT,
 ];
 const PAGE_UPDATE: &[i32] = &[
@@ -67,10 +80,13 @@ const PAGE_UPDATE: &[i32] = &[
 
 const SETTINGS_CLASS: PCWSTR = w!("VoiceTypeSettings");
 const CLIENT_W: i32 = 440;
-const CLIENT_H: i32 = 430;
+const CLIENT_H: i32 = 450;
 
 const AUTOSTART_VALUE: PCWSTR = w!("VoiceType");
 const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
+const APP_KEY: PCWSTR = w!("Software\\VoiceType");
+const HOTKEY_VALUE: PCWSTR = w!("Hotkey");
+const DEFAULT_HOTKEY_VK: u32 = 0x78;
 
 /// WM_NOTIFY 的 NMHDR 头（windows crate 该类型门控在未启用 feature 下，按内存布局读取）。
 #[repr(C)]
@@ -133,6 +149,90 @@ fn set_autostart(enable: bool) -> Result<(), String> {
         let _ = RegCloseKey(hkey);
         result
     }
+}
+
+// ---------- 录音热键：持久化与展示 ----------
+
+/// 读取用户自定义热键；未设置时默认 F9 单键。存储格式：vk | (mod << 8)。
+pub fn load_hotkey() -> (u32, u32) {
+    unsafe {
+        let mut hkey = HKEY::default();
+        if RegOpenKeyExW(HKEY_CURRENT_USER, APP_KEY, None, KEY_QUERY_VALUE, &mut hkey).0 != 0 {
+            return (DEFAULT_HOTKEY_VK, 0);
+        }
+        let mut buf = [0u8; 4];
+        let mut size = buf.len() as u32;
+        let mut ty = REG_VALUE_TYPE::default();
+        let ok = RegQueryValueExW(
+            hkey,
+            HOTKEY_VALUE,
+            None,
+            Some(&mut ty),
+            Some(buf.as_mut_ptr()),
+            Some(&mut size),
+        )
+        .0
+            == 0
+            && size == 4;
+        let _ = RegCloseKey(hkey);
+        if !ok {
+            return (DEFAULT_HOTKEY_VK, 0);
+        }
+        let raw = u32::from_le_bytes(buf);
+        (raw & 0xFF, (raw >> 8) & 0xFF)
+    }
+}
+
+fn save_hotkey(vk: u32, mods: u32) -> Result<(), String> {
+    unsafe {
+        let mut hkey = HKEY::default();
+        werr(RegCreateKeyW(HKEY_CURRENT_USER, APP_KEY, &mut hkey))?;
+        let bytes = (vk | (mods << 8)).to_le_bytes();
+        let result = werr(RegSetValueExW(hkey, HOTKEY_VALUE, None, REG_DWORD, Some(&bytes)));
+        let _ = RegCloseKey(hkey);
+        result
+    }
+}
+
+/// 热键控件 HOTKEYF_* 修饰键 → RegisterHotKey 的 MOD_*。
+fn hotkeyf_to_mod(f: u32) -> u32 {
+    let mut m = 0;
+    if f & HOTKEYF_CONTROL != 0 { m |= 0x2; } // MOD_CONTROL
+    if f & HOTKEYF_SHIFT != 0 { m |= 0x4; } // MOD_SHIFT
+    if f & HOTKEYF_ALT != 0 { m |= 0x1; } // MOD_ALT
+    m
+}
+
+fn mod_to_hotkeyf(m: u32) -> u32 {
+    let mut f = 0;
+    if m & 0x2 != 0 { f |= HOTKEYF_CONTROL; }
+    if m & 0x4 != 0 { f |= HOTKEYF_SHIFT; }
+    if m & 0x1 != 0 { f |= HOTKEYF_ALT; }
+    f
+}
+
+/// 虚拟键码的本地化键名（如 "F9"）。
+fn key_name(vk: u32) -> String {
+    unsafe {
+        let sc = MapVirtualKeyW(vk, MAPVK_VK_TO_VSC);
+        let mut buf = [0u16; 32];
+        let n = GetKeyNameTextW((sc << 16) as i32, &mut buf);
+        if n > 0 {
+            String::from_utf16_lossy(&buf[..n as usize])
+        } else {
+            format!("Key 0x{vk:02X}")
+        }
+    }
+}
+
+/// 组合键显示文本（如 "Ctrl + Shift + F9"）。
+pub fn combo_text(vk: u32, mods: u32) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if mods & 0x2 != 0 { parts.push("Ctrl".into()); }
+    if mods & 0x4 != 0 { parts.push("Shift".into()); }
+    if mods & 0x1 != 0 { parts.push("Alt".into()); }
+    parts.push(key_name(vk));
+    parts.join(" + ")
 }
 
 // ---------- 窗口与控件 ----------
@@ -262,8 +362,12 @@ pub unsafe fn show_settings(main_hwnd: HWND) {
         PBS_SMOOTH_RAW | PBS_MARQUEE_RAW,
         30, 222, CLIENT_W - 60, 20, IDC_PROGRESS, font,
     );
-    add_control(hwnd, w!("BUTTON"), "开机自动启动（托盘驻留）", BS_AUTOCHECKBOX_RAW, 30, 276, 260, 22, IDC_AUTOSTART, font);
-    add_control(hwnd, w!("STATIC"), "F9 开始 / 结束录音；说完停顿自动结束并注入", 0, 30, 306, 380, 22, IDC_HINT, font);
+    group("录音快捷键（点击框内按下组合键，再点应用）", 10, 272, CLIENT_W - 20, 76, IDC_GROUP_HOTKEY);
+    add_control(hwnd, w!("msctls_hotkey32"), "", 0, 30, 298, 200, 24, IDC_HOTKEY, font);
+    add_control(hwnd, w!("BUTTON"), "应用", 0, 240, 296, 90, 26, IDC_BTN_APPLY_HOTKEY, font);
+    add_control(hwnd, w!("STATIC"), "", 0, 30, 326, 360, 20, IDC_HOTKEY_NOW, font);
+    add_control(hwnd, w!("BUTTON"), "开机自动启动（托盘驻留）", BS_AUTOCHECKBOX_RAW, 30, 356, 260, 22, IDC_AUTOSTART, font);
+    add_control(hwnd, w!("STATIC"), "说完停顿自动结束并注入；托盘右键有更多操作", 0, 30, 386, 380, 22, IDC_HINT, font);
 
     // ---- 第 2 页：更新·关于 ----
     group("更新与公告", 10, 48, CLIENT_W - 20, 300, IDC_GROUP_UPDATE);
@@ -362,6 +466,20 @@ pub fn refresh_all(hwnd: HWND) {
     if let Some(ctrl) = get_ctrl(hwnd, IDC_VER) {
         set_window_text(ctrl, &format!("当前版本 v{}", updater::APP_VERSION));
     }
+    let (vk, mods) = with_app(|app| (app.hotkey_vk, app.hotkey_mods)).unwrap_or((DEFAULT_HOTKEY_VK, 0));
+    if let Some(ctrl) = get_ctrl(hwnd, IDC_HOTKEY) {
+        unsafe {
+            let _ = SendMessageW(
+                ctrl,
+                HKM_SETHOTKEY,
+                Some(WPARAM(((mod_to_hotkeyf(mods) << 8) | vk) as usize)),
+                Some(LPARAM(0)),
+            );
+        }
+    }
+    if let Some(ctrl) = get_ctrl(hwnd, IDC_HOTKEY_NOW) {
+        set_window_text(ctrl, &format!("当前生效：{}", combo_text(vk, mods)));
+    }
     if let Some(ctrl) = get_ctrl(hwnd, IDC_AUTOSTART) {
         unsafe {
             let _ = SendMessageW(
@@ -454,6 +572,56 @@ pub unsafe fn on_command(hwnd: HWND, id: i32) {
                     let _ = SendMessageW(bar, PBM_SETMARQUEE, Some(WPARAM(1)), Some(LPARAM(50)));
                 }
                 models_dl::spawn_model_download(hwnd.0 as isize);
+            }
+        }
+        IDC_BTN_APPLY_HOTKEY => {
+            let raw = get_ctrl(hwnd, IDC_HOTKEY)
+                .map(|ctrl| SendMessageW(ctrl, HKM_GETHOTKEY, Some(WPARAM(0)), Some(LPARAM(0))).0)
+                .unwrap_or(0);
+            let vk = (raw & 0xFF) as u32;
+            let hotkeyf = ((raw >> 8) & 0xFF) as u32;
+            if vk == 0 {
+                let text = wide("请先点击左侧输入框，按下想要设置的组合键。");
+                let _ = MessageBoxW(
+                    Some(hwnd),
+                    PCWSTR(text.as_ptr()),
+                    w!("VoiceType"),
+                    MB_ICONINFORMATION,
+                );
+                return;
+            }
+            let mods = hotkeyf_to_mod(hotkeyf);
+            if ui_main::apply_new_hotkey(hwnd, vk, mods) {
+                // 成功：持久化 + 刷新显示。
+                let _ = save_hotkey(vk, mods);
+                if let Some(ctrl) = get_ctrl(hwnd, IDC_HOTKEY_NOW) {
+                    set_window_text(ctrl, &format!("当前生效：{}", combo_text(vk, mods)));
+                }
+            } else {
+                // 冲突：提示并回退控件显示为原热键。
+                let (ovk, omods) =
+                    with_app(|app| (app.hotkey_vk, app.hotkey_mods)).unwrap_or((DEFAULT_HOTKEY_VK, 0));
+                if let Some(ctrl) = get_ctrl(hwnd, IDC_HOTKEY) {
+                    let _ = SendMessageW(
+                        ctrl,
+                        HKM_SETHOTKEY,
+                        Some(WPARAM(((mod_to_hotkeyf(omods) << 8) | ovk) as usize)),
+                        Some(LPARAM(0)),
+                    );
+                }
+                let text = wide(&format!(
+                    "快捷键 {} 注册失败：可能已被其他程序占用。
+
+已恢复原快捷键 {}，请换一个组合再试。",
+                    combo_text(vk, mods),
+                    combo_text(ovk, omods)
+                ));
+                let _ = MessageBoxW(
+                    Some(hwnd),
+                    PCWSTR(text.as_ptr()),
+                    w!("VoiceType"),
+                    MB_ICONWARNING,
+                );
             }
         }
         IDC_BTN_UPDATE => {

@@ -143,6 +143,11 @@ struct App {
     hybrid: HybridInjector,
     /// 主界面窗口（首次打开时创建，关闭=隐藏复用）。
     settings: HWND,
+    /// 录音热键（用户可自定义，注册表持久化；vk 为虚拟键码，mods 为 MOD_* 组合）。
+    hotkey_vk: u32,
+    hotkey_mods: u32,
+    /// 热键组合的显示文本（如 "Ctrl + F9"），托盘提示与悬浮条文案用。
+    hotkey_name: String,
 }
 
 thread_local! {
