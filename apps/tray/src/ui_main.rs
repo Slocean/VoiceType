@@ -183,8 +183,30 @@ pub fn drain_worker_events() {
 
 // ---------- 托盘 ----------
 
+/// 加载 exe 资源段里的内嵌图标（build.rs 经 winresource 写入，资源 ID 1）。
+/// 找不到时回退系统默认应用图标（开发构建等场景）。
+unsafe fn load_app_icon(hinst: HINSTANCE, small: bool) -> HICON {
+    let (cx, cy) = if small {
+        (GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON))
+    } else {
+        (GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON))
+    };
+    LoadImageW(
+        Some(hinst.into()),
+        PCWSTR(1 as _),
+        IMAGE_ICON,
+        cx,
+        cy,
+        LR_DEFAULTSIZE,
+    )
+    .map(|h| HICON(h.0))
+    .ok()
+    .unwrap_or_else(|| LoadIconW(None, IDI_APPLICATION).unwrap_or_default())
+}
+
 unsafe fn add_tray_icon(hwnd: HWND) {
-    let icon = LoadIconW(None, IDI_APPLICATION).unwrap_or_default();
+    let hinst: HINSTANCE = GetModuleHandleW(None).unwrap().into();
+    let icon = load_app_icon(hinst, true);
     let mut data = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
         hWnd: hwnd,
@@ -463,6 +485,8 @@ pub(crate) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         let hinst: HINSTANCE = GetModuleHandleW(None)?.into();
+        // 任务栏 / Alt-Tab / 资源管理器显示内嵌图标。
+        let big_icon = load_app_icon(hinst, false);
 
         // 主窗口：隐藏的消息窗口（热键/托盘回调的载体）。
         let class = w!("VoiceTypeMainWindow");
@@ -470,6 +494,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             lpfnWndProc: Some(wndproc),
             hInstance: hinst,
             lpszClassName: class,
+            hIcon: big_icon,
             ..Default::default()
         };
         RegisterClassW(&wc);
@@ -494,6 +519,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             lpfnWndProc: Some(wndproc),
             hInstance: hinst,
             lpszClassName: overlay_class,
+            hIcon: big_icon,
             ..Default::default()
         };
         RegisterClassW(&wc2);

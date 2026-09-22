@@ -23,6 +23,8 @@ AppId={{8E5F2A10-6C3D-4B8A-9E21-3F7D0A55C101}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppPublisher=Slocean
+; 安装包本身与卸载入口都用应用图标。
+SetupIconFile=..\assets\voicetype.ico
 DefaultDirName={localappdata}\{#AppName}
 DisableProgramGroupPage=yes
 ; 按用户安装，热更静默重装也不需要提权。
