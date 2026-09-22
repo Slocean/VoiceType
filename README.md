@@ -98,13 +98,14 @@ Release 资产（全部附 `.sha256` 清单）：
 
 | 资产 | 说明 |
 | --- | --- |
-| `voicetype-win-x64-portable.zip` | **便携版**：解压即用，托盘菜单「下载语音模型…」一键获取模型 |
-| `voicetype-win-x64-portable-with-models.zip` | **便携版（含模型）**：模型已内嵌，解压即用 |
-| `voicetype-setup-x64.exe` | **安装版**：Inno Setup 向导，按用户安装到 `%LocalAppData%\VoiceType`（无需管理员），可选开机自启，装完可一键下载模型 |
+| `voicetype-tray.exe` | **便携版（推荐首装入口）**：单文件即装即用，模型在应用内一键下载 |
 | `voicetype-setup-x64-with-models.exe` | **安装版（含模型）**：模型已内嵌，安装完成即可用 |
-| `voicetype-tray.exe` | 裸 exe，便携版热更新的下载目标 |
+| `voicetype-setup-x64.exe` | **安装版**：Inno Setup 向导，按用户安装到 `%LocalAppData%\VoiceType`（无需管理员），可选开机自启，装完可一键下载模型 |
+| `voicetype-win-x64-portable-with-models.zip` | 便携版（含模型）zip 变体：离线场景备选 |
+| `voicetype-win-x64-portable.zip` | 便携版 zip 变体：与裸 exe 等价，多带一份文档和备用脚本 |
 
-便携版使用：解压 → 启动 `voicetype-tray.exe` → 托盘右键「下载语音模型…」（含模型变体免此步）。
+便携版使用：下载 `voicetype-tray.exe` → 运行 → 托盘右键「下载语音模型…」→ 完成。
+（该文件同时是热更新的下载目标，首装与热更同源。）
 
 ## 模型获取方式
 
