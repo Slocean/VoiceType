@@ -39,7 +39,8 @@ pub struct VoiceSession<V: Vad, A: StreamingAsr> {
     closed: bool,
     /// 段内已上屏的文本，用于 ASR 无新假设时补 Interim。
     last_interim: String,
-    /// 会话开启后一直无语音时，累计多少采样自动 Empty 收尾（默认 5 秒）。
+    /// 会话开启后一直无语音时，累计多少采样自动 Empty 收尾（默认 10 秒）。
+    /// 16kHz × 10s。
     empty_after_samples: usize,
 }
 
@@ -50,7 +51,7 @@ impl<V: Vad, A: StreamingAsr> VoiceSession<V, A> {
             asr,
             closed: false,
             last_interim: String::new(),
-            empty_after_samples: 80_000,
+            empty_after_samples: 160_000,
         }
     }
 

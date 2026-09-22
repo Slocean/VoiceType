@@ -27,10 +27,11 @@ const ASR_URL: &str = concat!(
     "sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23.tar.bz2"
 );
 
-/// 进度事件（主线程消费）。
+/// 进度事件（主线程消费）。percent 为 None 表示不确定进度（VAD/解压阶段）。
 pub struct ModelEvent {
     pub done: bool,
     pub ok: bool,
+    pub percent: Option<u32>,
     pub text: String,
 }
 
@@ -86,9 +87,9 @@ pub fn models_ready() -> bool {
     vad_path(&root).is_file() && asr_dir(&root).join("tokens.txt").is_file()
 }
 
-fn emit(notify: NotifyHwnd, done: bool, ok: bool, text: String) {
+fn emit(notify: NotifyHwnd, done: bool, ok: bool, percent: Option<u32>, text: String) {
     if let Ok(mut st) = MODEL_STATE.lock() {
-        *st = Some(ModelEvent { done, ok, text });
+        *st = Some(ModelEvent { done, ok, percent, text });
     }
     notify.post();
 }
@@ -145,7 +146,7 @@ pub fn spawn_model_download(hwnd: isize) {
             // VAD（约 0.6MB）
             let vad = vad_path(&root);
             if !vad.is_file() {
-                emit(notify, false, true, "正在下载 VAD 模型（0.6MB）…".into());
+                emit(notify, false, true, None, "正在下载 VAD 模型（0.6MB）…".into());
                 http_download(VAD_URL, &vad, &|_, _| {})?;
             }
 
@@ -155,7 +156,7 @@ pub fn spawn_model_download(hwnd: isize) {
                 let archive = root.join(format!("{MODEL_SUBDIR}.tar.bz2"));
                 let partial = root.join(format!("{MODEL_SUBDIR}.tar.bz2.partial"));
                 let last_pct = std::cell::Cell::new(-1i32);
-                emit(notify, false, true, "正在下载识别模型（14MB）…".into());
+                emit(notify, false, true, Some(0), "正在下载识别模型（14MB）…".into());
                 http_download(ASR_URL, &partial, &|read, total| {
                     if let Some(total) = total {
                         if total > 0 {
@@ -166,6 +167,7 @@ pub fn spawn_model_download(hwnd: isize) {
                                     notify,
                                     false,
                                     true,
+                                    Some(pct as u32),
                                     format!("正在下载识别模型… {pct}%"),
                                 );
                             }
@@ -177,7 +179,7 @@ pub fn spawn_model_download(hwnd: isize) {
                 if std::fs::metadata(&archive).map(|m| m.len()).unwrap_or(0) < 1024 * 1024 {
                     return Err("下载的模型压缩包过小，内容可能不完整".into());
                 }
-                emit(notify, false, true, "正在解压识别模型…".into());
+                emit(notify, false, true, None, "正在解压识别模型…".into());
                 let file = std::fs::File::open(&archive).map_err(|e| format!("打开压缩包失败: {e}"))?;
                 let bz = bzip2_rs::DecoderReader::new(file);
                 tar::Archive::new(bz)
@@ -189,8 +191,8 @@ pub fn spawn_model_download(hwnd: isize) {
         })();
 
         match result {
-            Ok(()) => emit(notify, true, true, "语音模型下载完成，按 F9 即可开始使用".into()),
-            Err(e) => emit(notify, true, false, format!("模型下载失败：{e}")),
+            Ok(()) => emit(notify, true, true, Some(100), "语音模型下载完成，按 F9 即可开始使用".into()),
+            Err(e) => emit(notify, true, false, None, format!("模型下载失败：{e}")),
         }
         DOWNLOADING.store(false, std::sync::atomic::Ordering::SeqCst);
     });

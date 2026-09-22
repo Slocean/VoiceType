@@ -21,9 +21,7 @@ pub fn toggle_recording(main_hwnd: HWND) {
             app.ev_rx = None;
             app.recording = false;
             let _ = app.hybrid.cancel();
-            unsafe {
-                let _ = ShowWindow(app.overlay, SW_HIDE);
-            }
+            set_overlay_idle(app.overlay_text);
             return;
         }
         // 首次使用引导：模型未就绪时直接在 UI 里发起一键下载，不让用户去找脚本。
@@ -132,9 +130,7 @@ pub fn drain_worker_events() {
                     if let Some(h) = app.worker.take() {
                         let _ = h.join();
                     }
-                    unsafe {
-                        let _ = ShowWindow(app.overlay, SW_HIDE);
-                    }
+                    set_overlay_idle(app.overlay_text);
                     match app.mode {
                         InjectMode::Paste => {
                             let _ = ClipboardInjector::default().inject(&text);
@@ -152,7 +148,7 @@ pub fn drain_worker_events() {
                     }
                 });
             }
-            // VAD 断句但无语音内容（静默会话）：撤销上屏残留并静默收尾。
+            // VAD 断句但无语音内容：撤销上屏残留并提示（悬浮条常驻可见）。
             Ev::Empty => {
                 with_app(|app| {
                     app.recording = false;
@@ -161,9 +157,10 @@ pub fn drain_worker_events() {
                         let _ = h.join();
                     }
                     let _ = app.hybrid.cancel();
-                    unsafe {
-                        let _ = ShowWindow(app.overlay, SW_HIDE);
-                    }
+                    set_window_text(
+                        app.overlay_text,
+                        "未检测到语音，已自动停止（按 F9 重试）",
+                    );
                 });
             }
             Ev::Error(msg) => {
@@ -344,16 +341,22 @@ fn overlay_text_of(hwnd: HWND) -> HWND {
     with_app(|app| app.overlay_text).unwrap_or(hwnd)
 }
 
+/// 悬浮条就绪态文案（常驻显示）。
+const IDLE_TEXT: &str = "🎤 就绪 — 按 F9 开始说话";
+
+fn set_overlay_idle(overlay_text: HWND) {
+    set_window_text(overlay_text, IDLE_TEXT);
+}
+
 /// 模型下载后台任务：进度刷新悬浮条文本；结束时收起悬浮条、刷新主界面并弹窗。
 fn handle_model_event(hwnd: HWND) {
     let Some(ev) = models_dl::take_model_event() else { return };
     if !ev.done {
         set_window_text(overlay_text_of(hwnd), &ev.text);
+        settings::update_model_progress(ev.percent, &ev.text);
         return;
     }
-    with_app(|app| unsafe {
-        let _ = ShowWindow(app.overlay, SW_HIDE);
-    });
+    set_window_text(overlay_text_of(hwnd), IDLE_TEXT);
     settings::refresh_model_status();
     unsafe {
         let title = wide(if ev.ok { "VoiceType 模型" } else { "VoiceType 模型下载失败" });
@@ -425,6 +428,10 @@ pub(crate) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
         }
         WM_UPDATE_EVENT => {
             handle_update_event(hwnd);
+            LRESULT(0)
+        }
+        WM_NOTIFY => {
+            settings::on_notify(lparam);
             LRESULT(0)
         }
         WM_MODEL_EVENT => {
@@ -582,6 +589,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         add_tray_icon(hwnd);
+        // 悬浮条常驻：就绪态常显，录音时显示识别文本。
+        set_window_text(overlay_text, IDLE_TEXT);
+        let _ = ShowWindow(overlay, SW_SHOW);
         // 首次使用（模型未就绪）时直接打开主界面引导下载，同时冒泡提示托盘位置。
         if !models_dl::models_ready() {
             settings::show_settings(hwnd);
