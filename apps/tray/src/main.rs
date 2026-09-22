@@ -1,5 +1,6 @@
 //! VoiceType 托盘常驻应用。
 //!
+//!
 //! 线程模型：
 //! - 主线程跑 Win32 消息循环，持有全部 UI 状态（托盘/悬浮条/注入器），
 //!   注入动作只在主线程执行；
@@ -10,6 +11,9 @@
 //!
 //! 交互：F9 开始录音（悬浮条显示中间结果，hybrid 模式同步上屏到目标应用），
 //! 再按 F9 结束并注入定稿；托盘右键菜单切换注入模式 / 退出。
+
+// GUI 子系统：托盘应用启动不弹控制台窗口。
+#![windows_subsystem = "windows"]
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};

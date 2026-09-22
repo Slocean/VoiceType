@@ -26,6 +26,27 @@ pub fn toggle_recording(main_hwnd: HWND) {
             }
             return;
         }
+        // 首次使用引导：模型未就绪时直接在 UI 里发起一键下载，不让用户去找脚本。
+        if !models_dl::models_ready() {
+            unsafe {
+                let text = wide(
+                    "语音模型尚未下载（约 15MB，需联网一次）。\n\n是否立即下载？下载完成后按 F9 即可开始语音输入。",
+                );
+                let title = wide("VoiceType 首次使用");
+                let choice = MessageBoxW(
+                    Some(main_hwnd),
+                    PCWSTR(text.as_ptr()),
+                    PCWSTR(title.as_ptr()),
+                    MB_ICONQUESTION | MB_YESNO,
+                );
+                if choice == IDYES {
+                    set_window_text(app.overlay_text, "正在下载语音模型…");
+                    let _ = ShowWindow(app.overlay, SW_SHOW);
+                    models_dl::spawn_model_download(main_hwnd.0 as isize);
+                }
+            }
+            return;
+        }
         // 启动新的识别会话。
         let model_dir = resolve_model_dir();
         let Some(asr_cfg) = find_model_files(&model_dir) else {
@@ -186,6 +207,23 @@ unsafe fn remove_tray_icon(hwnd: HWND) {
         ..Default::default()
     };
     let _ = Shell_NotifyIconW(NIM_DELETE, &data);
+}
+
+/// 托盘气泡通知：Win11 默认把新图标折叠进「隐藏图标」溢出区，启动时
+/// 主动冒个泡，告诉用户入口在托盘。
+unsafe fn show_tray_balloon(hwnd: HWND, title: &str, text: &str) {
+    let mut data = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: hwnd,
+        uID: TRAY_UID,
+        uFlags: NIF_INFO,
+        ..Default::default()
+    };
+    let t = wide(title);
+    let b = wide(text);
+    data.szInfoTitle[..t.len() - 1].copy_from_slice(&t[..t.len() - 1]);
+    data.szInfo[..b.len() - 1].copy_from_slice(&b[..b.len() - 1]);
+    let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
 }
 
 unsafe fn show_tray_menu(hwnd: HWND) {
@@ -474,8 +512,28 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             });
         });
 
-        RegisterHotKey(Some(hwnd), HOTKEY_ID, MOD_NOREPEAT, VK_F9.0 as u32)?;
+        // 热键被其他应用占用时不静默退出——托盘应用没了图标用户找不着北。
+        if let Err(e) = RegisterHotKey(Some(hwnd), HOTKEY_ID, MOD_NOREPEAT, VK_F9.0 as u32) {
+            let text = wide(&format!(
+                "F9 全局热键注册失败（可能被其他应用占用）：{e}\n\nVoiceType 将继续在托盘运行，可稍后重启本应用重试。"
+            ));
+            let title = wide("VoiceType");
+            let _ = MessageBoxW(
+                Some(hwnd),
+                PCWSTR(text.as_ptr()),
+                PCWSTR(title.as_ptr()),
+                MB_ICONWARNING,
+            );
+        }
         add_tray_icon(hwnd);
+        // 首次使用（模型未就绪）时冒泡引导：图标可能被折叠进托盘溢出区。
+        if !models_dl::models_ready() {
+            show_tray_balloon(
+                hwnd,
+                "VoiceType 已在后台运行",
+                "按 F9 开始语音输入。首次使用请右键托盘图标（可能在右下角「隐藏图标」里）选择「下载语音模型」。",
+            );
+        }
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
