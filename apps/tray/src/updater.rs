@@ -486,7 +486,15 @@ impl NotifyHwnd {
 pub static UPDATE_STATE: Mutex<Option<UpdateEvent>> = Mutex::new(None);
 
 /// 后台线程入口：检查 →（有更新则）下载校验，完成后 PostMessage 通知主线程弹窗。
+/// 进行中时重复触发直接忽略（托盘菜单/主界面按钮双击防护）。
 pub fn spawn_check_and_download(hwnd: isize) {
+    static CHECKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if CHECKING
+        .compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
     let notify = NotifyHwnd(hwnd);
     std::thread::spawn(move || {
         let event = match check_update() {
@@ -527,6 +535,7 @@ pub fn spawn_check_and_download(hwnd: isize) {
             *st = Some(event);
         }
         notify.post();
+        CHECKING.store(false, std::sync::atomic::Ordering::SeqCst);
     });
 }
 

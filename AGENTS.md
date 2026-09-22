@@ -33,6 +33,7 @@ Release 页确认 6 个资产齐全（两种安装形态 + 裸 exe + 三个 `.sh
 | `app_update.json` | 更新通道：版本 + 更新公告（唯一事实来源） |
 | `apps/tray/src/updater.rs` | 检查 / 下载校验 / 应用更新（PowerShell 助手） |
 | `apps/tray/src/models_dl.rs` | 应用内一键下载模型（tar.bz2 流式解压） |
+| `apps/tray/src/settings.rs` | 主界面窗口（模式/模型/更新/公告/自启；关闭=隐藏复用） |
 | `scripts/package.ps1` | 双形态 + 带模型变体打包 + `.sha256` 清单生成 |
 | `scripts/installer.iss` | 安装版打包脚本（写 `install.mode` 标记；`/DModelsDir` 内嵌模型） |
 | `scripts/release_notes.py` | 从通道生成 Release 公告正文 |

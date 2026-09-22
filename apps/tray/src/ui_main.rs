@@ -239,6 +239,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     item(MENU_MODE_HYBRID, "混合模式（流式）", mode == InjectMode::Hybrid);
     let sep = wide("");
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR(sep.as_ptr()));
+    item(MENU_MAIN, "主界面…", false);
     // 置灰的版本行，方便确认热更后的实际版本。
     {
         let text = wide(&format!("当前版本 v{}", updater::APP_VERSION));
@@ -278,6 +279,11 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         MENU_MODE_HYBRID => {
             with_app(|app| app.mode = InjectMode::Hybrid);
         }
+        MENU_MAIN => {
+            unsafe {
+                settings::show_settings(hwnd);
+            }
+        }
         MENU_UPDATE_CHECK => {
             set_window_text(
                 overlay_text_of(hwnd),
@@ -316,21 +322,22 @@ fn overlay_text_of(hwnd: HWND) -> HWND {
     with_app(|app| app.overlay_text).unwrap_or(hwnd)
 }
 
-/// 模型下载后台任务：进度刷新悬浮条文本；结束时收起悬浮条并弹窗汇报结果。
-fn handle_model_event(_hwnd: HWND) {
+/// 模型下载后台任务：进度刷新悬浮条文本；结束时收起悬浮条、刷新主界面并弹窗。
+fn handle_model_event(hwnd: HWND) {
     let Some(ev) = models_dl::take_model_event() else { return };
     if !ev.done {
-        set_window_text(overlay_text_of(_hwnd), &ev.text);
+        set_window_text(overlay_text_of(hwnd), &ev.text);
         return;
     }
     with_app(|app| unsafe {
         let _ = ShowWindow(app.overlay, SW_HIDE);
     });
+    settings::refresh_model_status();
     unsafe {
         let title = wide(if ev.ok { "VoiceType 模型" } else { "VoiceType 模型下载失败" });
         let text = wide(&ev.text);
         let _ = MessageBoxW(
-            Some(_hwnd),
+            Some(hwnd),
             PCWSTR(text.as_ptr()),
             PCWSTR(title.as_ptr()),
             if ev.ok { MB_ICONINFORMATION } else { MB_ICONWARNING },
@@ -338,9 +345,12 @@ fn handle_model_event(_hwnd: HWND) {
     }
 }
 
-/// 更新后台任务完成：弹出结果 / 询问是否立即重启应用。
+/// 更新后台任务完成：主界面开着则把公告写进窗口，否则弹窗；可应用时询问重启。
 fn handle_update_event(hwnd: HWND) {
     let Some(ev) = updater::take_update_event() else { return };
+    if ev.ok && !ev.ready && settings::fill_announcement(&ev.text) {
+        return;
+    }
     unsafe {
         let title = wide(if ev.ok { "VoiceType 更新" } else { "VoiceType 更新失败" });
         let text = wide(&ev.text);
@@ -379,7 +389,7 @@ fn handle_update_event(hwnd: HWND) {
 
 // ---------- 窗口过程 ----------
 
-unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+pub(crate) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_HOTKEY => {
             if wparam.0 as i32 == HOTKEY_ID {
@@ -404,9 +414,28 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if mouse == WM_RBUTTONUP {
                 show_tray_menu(hwnd);
             } else if mouse == WM_LBUTTONDBLCLK {
-                toggle_recording(hwnd);
+                // 双击托盘：打开主界面（录音开关走 F9，避免与窗口操作混淆）。
+                settings::show_settings(hwnd);
             }
             LRESULT(0)
+        }
+        WM_COMMAND => {
+            let id = (wparam.0 & 0xFFFF) as i32;
+            unsafe {
+                settings::on_command(hwnd, id);
+            }
+            LRESULT(0)
+        }
+        WM_CLOSE => {
+            // 主界面窗口：关闭=隐藏（托盘常驻应用不真正退出）。
+            if with_app(|app| app.settings == hwnd).unwrap_or(false) {
+                unsafe {
+                    let _ = ShowWindow(hwnd, SW_HIDE);
+                }
+                LRESULT(0)
+            } else {
+                LRESULT(0)
+            }
         }
         WM_DESTROY => {
             // 退出前收尾：移除托盘、停掉进行中的录音。
@@ -509,6 +538,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 overlay,
                 overlay_text,
                 hybrid: HybridInjector::default(),
+                settings: HWND::default(),
             });
         });
 
@@ -526,12 +556,13 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             );
         }
         add_tray_icon(hwnd);
-        // 首次使用（模型未就绪）时冒泡引导：图标可能被折叠进托盘溢出区。
+        // 首次使用（模型未就绪）时直接打开主界面引导下载，同时冒泡提示托盘位置。
         if !models_dl::models_ready() {
+            settings::show_settings(hwnd);
             show_tray_balloon(
                 hwnd,
                 "VoiceType 已在后台运行",
-                "按 F9 开始语音输入。首次使用请右键托盘图标（可能在右下角「隐藏图标」里）选择「下载语音模型」。",
+                "主界面已打开：可一键下载语音模型。按 F9 开始语音输入。",
             );
         }
 

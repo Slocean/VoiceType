@@ -127,7 +127,15 @@ fn http_download(
 }
 
 /// 后台线程入口：检查 → 下载 → 解压，完成后 PostMessage 通知主线程。
+/// 进行中时重复触发直接忽略（托盘菜单/主界面按钮双击防护）。
 pub fn spawn_model_download(hwnd: isize) {
+    static DOWNLOADING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if DOWNLOADING
+        .compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst)
+        .is_err()
+    {
+        return;
+    }
     let notify = NotifyHwnd(hwnd);
     std::thread::spawn(move || {
         let result = (|| -> Result<(), String> {
@@ -184,6 +192,7 @@ pub fn spawn_model_download(hwnd: isize) {
             Ok(()) => emit(notify, true, true, "语音模型下载完成，按 F9 即可开始使用".into()),
             Err(e) => emit(notify, true, false, format!("模型下载失败：{e}")),
         }
+        DOWNLOADING.store(false, std::sync::atomic::Ordering::SeqCst);
     });
 }
 

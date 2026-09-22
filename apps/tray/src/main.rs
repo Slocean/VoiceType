@@ -37,6 +37,7 @@ use worker::start_worker;
 mod ui_main;
 mod updater;
 mod models_dl;
+mod settings;
 
 // ---------- 入口 ----------
 
@@ -61,6 +62,7 @@ const MENU_MODE_HYBRID: i32 = 1003;
 const MENU_UPDATE_CHECK: i32 = 1005;
 const MENU_ANNOUNCEMENT: i32 = 1006;
 const MENU_DOWNLOAD_MODELS: i32 = 1007;
+const MENU_MAIN: i32 = 1008;
 const MENU_QUIT: i32 = 1004;
 
 const OVERLAY_W: i32 = 520;
@@ -139,6 +141,8 @@ struct App {
     overlay: HWND,
     overlay_text: HWND,
     hybrid: HybridInjector,
+    /// 主界面窗口（首次打开时创建，关闭=隐藏复用）。
+    settings: HWND,
 }
 
 thread_local! {
