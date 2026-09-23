@@ -8,6 +8,7 @@
 
 #ifndef AppVersion
 #define AppVersion "0.0.0"
+#endif
 
 #define OutBase "voicetype-setup-x64"
 
