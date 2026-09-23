@@ -36,7 +36,7 @@ if ($missing) {
     Get-IfNeeded "$BaseUrl/$ModelName.tar.bz2" $tarball 100MB
     Write-Host "  解出所需文件…"
     foreach ($f in $Files) {
-        tar -xjf $tarball -C $Dir --wildcards "$ModelName/$f"
+        tar -xjf $tarball -C $Dir "$ModelName/$f"
         if ($LASTEXITCODE -ne 0) { Write-Error "解压失败: $f"; exit 1 }
         Move-Item (Join-Path $Dir "$ModelName/$f") (Join-Path $Dir $f) -Force
     }
