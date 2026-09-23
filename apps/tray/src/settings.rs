@@ -27,7 +27,6 @@ const IDC_BTN_ANNOUNCE: i32 = 2014;
 const IDC_ANNOUNCE_EDIT: i32 = 2015;
 const IDC_AUTOSTART: i32 = 2016;
 const IDC_HINT: i32 = 2017;
-const IDC_PROGRESS: i32 = 2018;
 const IDC_ABOUT: i32 = 2019;
 const IDC_GROUP_MODE: i32 = 2020;
 const IDC_GROUP_MODEL: i32 = 2021;
@@ -45,8 +44,6 @@ const BS_AUTORADIOBUTTON_RAW: u32 = 0x9;
 const ES_MULTILINE_RAW: u32 = 0x4;
 const ES_AUTOVSCROLL_RAW: u32 = 0x40;
 const ES_READONLY_RAW: u32 = 0x800;
-const PBS_SMOOTH_RAW: u32 = 0x1;
-const PBS_MARQUEE_RAW: u32 = 0x8;
 const BM_SETCHECK: u32 = 0xF1;
 const BM_GETCHECK: u32 = 0xF2;
 const BST_CHECKED: WPARAM = WPARAM(1);
@@ -56,9 +53,6 @@ const TCM_INSERTITEMW: u32 = 0x133E;
 const TCM_GETCURSEL: u32 = 0x130B;
 const TCIF_TEXT: u32 = 1;
 const TCN_SELCHANGE: i32 = -551;
-const PBM_SETRANGE32: u32 = 0x0406;
-const PBM_SETPOS: u32 = 0x0402;
-const PBM_SETMARQUEE: u32 = 0x040A;
 const HKM_SETHOTKEY: u32 = 0x0401;
 const HKM_GETHOTKEY: u32 = 0x0402;
 // 热键控件的修饰键标志（HOTKEYF_*，与 MOD_* 编码不同需转换）。
@@ -69,7 +63,7 @@ const HOTKEYF_ALT: u32 = 0x4;
 /// 两页各自包含的控件（切 tab 时整组显隐）。
 const PAGE_FUNCTION: &[i32] = &[
     IDC_GROUP_MODE, IDC_MODE_PASTE, IDC_MODE_TYPE, IDC_MODE_HYBRID,
-    IDC_GROUP_MODEL, IDC_MODEL_STATUS, IDC_BTN_DOWNLOAD, IDC_PROGRESS,
+    IDC_GROUP_MODEL, IDC_MODEL_STATUS,
     IDC_GROUP_HOTKEY, IDC_HOTKEY, IDC_BTN_APPLY_HOTKEY, IDC_HOTKEY_NOW,
     IDC_AUTOSTART, IDC_HINT,
 ];
@@ -352,16 +346,8 @@ pub unsafe fn show_settings(main_hwnd: HWND) {
     add_control(hwnd, w!("BUTTON"), "键入模式", BS_AUTORADIOBUTTON_RAW, 30, 96, 180, 22, IDC_MODE_TYPE, font);
     add_control(hwnd, w!("BUTTON"), "混合模式（边说边出字）", BS_AUTORADIOBUTTON_RAW, 30, 120, 240, 22, IDC_MODE_HYBRID, font);
 
-    group("语音模型", 10, 160, CLIENT_W - 20, 104, IDC_GROUP_MODEL);
-    add_control(hwnd, w!("STATIC"), "", 0, 30, 184, 250, 22, IDC_MODEL_STATUS, font);
-    add_control(hwnd, w!("BUTTON"), "下载语音模型", 0, 290, 180, 120, 28, IDC_BTN_DOWNLOAD, font);
-    add_control(
-        hwnd,
-        w!("msctls_progress32"),
-        "",
-        PBS_SMOOTH_RAW | PBS_MARQUEE_RAW,
-        30, 222, CLIENT_W - 60, 20, IDC_PROGRESS, font,
-    );
+    group("语音模型（已内置，随 exe 分发）", 10, 160, CLIENT_W - 20, 104, IDC_GROUP_MODEL);
+    add_control(hwnd, w!("STATIC"), "", 0, 30, 190, 380, 22, IDC_MODEL_STATUS, font);
     group("录音快捷键（点击框内按下组合键，再点应用）", 10, 272, CLIENT_W - 20, 76, IDC_GROUP_HOTKEY);
     add_control(hwnd, w!("msctls_hotkey32"), "", 0, 30, 298, 200, 24, IDC_HOTKEY, font);
     add_control(hwnd, w!("BUTTON"), "应用", 0, 240, 296, 90, 26, IDC_BTN_APPLY_HOTKEY, font);
@@ -388,13 +374,6 @@ pub unsafe fn show_settings(main_hwnd: HWND) {
         0, 306, 380, 36, 0, IDC_ABOUT, font,
     );
 
-    // 进度条量程；默认只显示第 1 页。
-    if let Some(bar) = get_ctrl(hwnd, IDC_PROGRESS) {
-        unsafe {
-            let _ = SendMessageW(bar, PBM_SETRANGE32, Some(WPARAM(0)), Some(LPARAM(100)));
-            let _ = SendMessageW(bar, PBM_SETMARQUEE, Some(WPARAM(0)), Some(LPARAM(50)));
-        }
-    }
     with_app(|app| app.settings = hwnd);
     set_page(hwnd, 0);
     refresh_all(hwnd);
@@ -434,9 +413,9 @@ pub fn is_open() -> bool {
 
 fn model_status_text() -> String {
     if models_dl::models_ready() {
-        "模型：已就绪".into()
+        "模型：已就绪（中英双语流式识别）".into()
     } else {
-        "模型：未下载（约 15MB）".into()
+        "模型：未就绪（内置模型解压失败，请检查磁盘）".into()
     }
 }
 
@@ -507,32 +486,6 @@ pub fn fill_announcement(text: &str) -> bool {
     }
 }
 
-/// 模型下载进度回写主界面进度条（percent None = 未知进度，跑马灯）。
-pub fn update_model_progress(percent: Option<u32>, text: &str) {
-    if !is_open() {
-        return;
-    }
-    let hwnd = with_app(|app| app.settings).unwrap_or_default();
-    if let Some(ctrl) = get_ctrl(hwnd, IDC_MODEL_STATUS) {
-        set_window_text(ctrl, text);
-    }
-    if let Some(bar) = get_ctrl(hwnd, IDC_PROGRESS) {
-        unsafe {
-            match percent {
-                Some(p) => {
-                    // 确定进度：关跑马灯，落点。
-                    let _ = SendMessageW(bar, PBM_SETMARQUEE, Some(WPARAM(0)), Some(LPARAM(50)));
-                    let _ = SendMessageW(bar, PBM_SETPOS, Some(WPARAM(p as usize)), Some(LPARAM(0)));
-                }
-                None => {
-                    // 未知进度：跑马灯滚动。
-                    let _ = SendMessageW(bar, PBM_SETMARQUEE, Some(WPARAM(1)), Some(LPARAM(50)));
-                }
-            }
-        }
-    }
-}
-
 pub fn refresh_model_status() {
     if !is_open() {
         return;
@@ -540,12 +493,6 @@ pub fn refresh_model_status() {
     let hwnd = with_app(|app| app.settings).unwrap_or_default();
     if let Some(ctrl) = get_ctrl(hwnd, IDC_MODEL_STATUS) {
         set_window_text(ctrl, &model_status_text());
-    }
-    if let Some(bar) = get_ctrl(hwnd, IDC_PROGRESS) {
-        unsafe {
-            let _ = SendMessageW(bar, PBM_SETMARQUEE, Some(WPARAM(0)), Some(LPARAM(50)));
-            let _ = SendMessageW(bar, PBM_SETPOS, Some(WPARAM(0)), Some(LPARAM(0)));
-        }
     }
 }
 
@@ -560,19 +507,6 @@ pub unsafe fn on_command(hwnd: HWND, id: i32) {
                 _ => InjectMode::Hybrid,
             };
             with_app(|app| app.mode = mode);
-        }
-        IDC_BTN_DOWNLOAD => {
-            if models_dl::models_ready() {
-                refresh_model_status();
-            } else {
-                if let Some(ctrl) = get_ctrl(hwnd, IDC_MODEL_STATUS) {
-                    set_window_text(ctrl, "正在下载语音模型…");
-                }
-                if let Some(bar) = get_ctrl(hwnd, IDC_PROGRESS) {
-                    let _ = SendMessageW(bar, PBM_SETMARQUEE, Some(WPARAM(1)), Some(LPARAM(50)));
-                }
-                models_dl::spawn_model_download(hwnd.0 as isize);
-            }
         }
         IDC_BTN_APPLY_HOTKEY => {
             let raw = get_ctrl(hwnd, IDC_HOTKEY)

@@ -24,24 +24,21 @@ pub fn toggle_recording(main_hwnd: HWND) {
             set_overlay_idle(app.overlay_text);
             return;
         }
-        // 首次使用引导：模型未就绪时直接在 UI 里发起一键下载，不让用户去找脚本。
+        // 模型随 exe 内置，正常情况下首次启动已解压；走到这里说明磁盘不可写等异常。
         if !models_dl::models_ready() {
             unsafe {
                 let text = wide(
-                    "语音模型尚未下载（约 15MB，需联网一次）。\n\n是否立即下载？下载完成后按 F9 即可开始语音输入。",
+                    "语音模型未就绪（内置模型解压可能失败，请检查磁盘空间或安装目录权限）。
+
+排除后重启应用即可。",
                 );
-                let title = wide("VoiceType 首次使用");
-                let choice = MessageBoxW(
+                let title = wide("VoiceType 模型异常");
+                let _ = MessageBoxW(
                     Some(main_hwnd),
                     PCWSTR(text.as_ptr()),
                     PCWSTR(title.as_ptr()),
-                    MB_ICONQUESTION | MB_YESNO,
+                    MB_ICONWARNING,
                 );
-                if choice == IDYES {
-                    set_window_text(app.overlay_text, "正在下载语音模型…");
-                    let _ = ShowWindow(app.overlay, SW_SHOW);
-                    models_dl::spawn_model_download(main_hwnd.0 as isize);
-                }
             }
             return;
         }
@@ -267,7 +264,6 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     }
     item(MENU_UPDATE_CHECK, "检查更新…", false);
     item(MENU_ANNOUNCEMENT, "更新公告", false);
-    item(MENU_DOWNLOAD_MODELS, "下载语音模型…", false);
     let sep = wide("");
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR(sep.as_ptr()));
     let quit = wide("退出");
@@ -313,23 +309,6 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         }
         MENU_ANNOUNCEMENT => {
             updater::spawn_fetch_announcement(hwnd.0 as isize);
-        }
-        MENU_DOWNLOAD_MODELS => {
-            if models_dl::models_ready() {
-                unsafe {
-                    let text = wide("语音模型已就绪，无需下载。");
-                    let title = wide("VoiceType 模型");
-                    let _ = MessageBoxW(
-                        Some(hwnd),
-                        PCWSTR(text.as_ptr()),
-                        PCWSTR(title.as_ptr()),
-                        MB_ICONINFORMATION,
-                    );
-                }
-            } else {
-                set_window_text(overlay_text_of(hwnd), "正在下载语音模型…");
-                models_dl::spawn_model_download(hwnd.0 as isize);
-            }
         }
         MENU_QUIT => {
             let _ = DestroyWindow(hwnd);
@@ -390,28 +369,6 @@ fn update_tray_tip(hwnd: HWND) {
 fn set_overlay_idle(overlay_text: HWND) {
     let name = with_app(|app| app.hotkey_name.clone()).unwrap_or_default();
     set_window_text(overlay_text, &format!("🎤 就绪 — 按 {name} 开始说话"));
-}
-
-/// 模型下载后台任务：进度刷新悬浮条文本；结束时收起悬浮条、刷新主界面并弹窗。
-fn handle_model_event(hwnd: HWND) {
-    let Some(ev) = models_dl::take_model_event() else { return };
-    if !ev.done {
-        set_window_text(overlay_text_of(hwnd), &ev.text);
-        settings::update_model_progress(ev.percent, &ev.text);
-        return;
-    }
-    set_overlay_idle(overlay_text_of(hwnd));
-    settings::refresh_model_status();
-    unsafe {
-        let title = wide(if ev.ok { "VoiceType 模型" } else { "VoiceType 模型下载失败" });
-        let text = wide(&ev.text);
-        let _ = MessageBoxW(
-            Some(hwnd),
-            PCWSTR(text.as_ptr()),
-            PCWSTR(title.as_ptr()),
-            if ev.ok { MB_ICONINFORMATION } else { MB_ICONWARNING },
-        );
-    }
 }
 
 /// 更新后台任务完成：主界面开着则把公告写进窗口，否则弹窗；可应用时询问重启。
@@ -476,10 +433,6 @@ pub(crate) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
         }
         WM_NOTIFY => {
             settings::on_notify(lparam);
-            LRESULT(0)
-        }
-        WM_MODEL_EVENT => {
-            handle_model_event(hwnd);
             LRESULT(0)
         }
         WM_TRAY_CALLBACK => {

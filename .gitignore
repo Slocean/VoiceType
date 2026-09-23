@@ -5,3 +5,5 @@
 scripts/models/
 
 dist/
+
+apps/tray/embedded-models/

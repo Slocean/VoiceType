@@ -42,6 +42,11 @@ mod settings;
 // ---------- 入口 ----------
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 首次启动把内置模型解压到模型目录（幂等，约 50MB 只在首次发生）。
+    if let Err(e) = models_dl::ensure_models_extracted() {
+        // 解压失败不阻断启动：F9 时会给出明确提示。
+        eprintln!("内置模型解压失败: {e}");
+    }
     ui_main::run()
 }
 
@@ -51,8 +56,6 @@ const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 const WM_WORKER_EVENT: u32 = WM_APP + 2;
 /// 更新后台任务（检查/下载/公告）完成事件。
 const WM_UPDATE_EVENT: u32 = WM_APP + 3;
-/// 模型下载后台任务进度/完成事件。
-const WM_MODEL_EVENT: u32 = WM_APP + 4;
 const HOTKEY_ID: i32 = 1;
 const TRAY_UID: u32 = 1;
 
@@ -61,7 +64,6 @@ const MENU_MODE_TYPE: i32 = 1002;
 const MENU_MODE_HYBRID: i32 = 1003;
 const MENU_UPDATE_CHECK: i32 = 1005;
 const MENU_ANNOUNCEMENT: i32 = 1006;
-const MENU_DOWNLOAD_MODELS: i32 = 1007;
 const MENU_MAIN: i32 = 1008;
 const MENU_QUIT: i32 = 1004;
 

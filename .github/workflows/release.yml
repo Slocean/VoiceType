@@ -28,10 +28,14 @@ jobs:
         shell: pwsh
         run: choco install innosetup -y --no-progress
 
+      # 模型随 exe 内置（embedded-models feature），下载源文件供编译期嵌入。
       - name: Release 构建
-        run: cargo build --release -p voicetype-tray
+        shell: pwsh
+        run: |
+          ./scripts/prepare-models.ps1
+          cargo build --release -p voicetype-tray --features embedded-models
 
-      # 便携版 zip + 裸 exe + 安装版 + 两种带模型变体，全部产物带 .sha256 清单。
+      # 便携版 zip + 裸 exe + 安装版，全部自带模型，产物带 .sha256 清单。
       - name: 打包
         shell: pwsh
         run: ./scripts/package.ps1 -SkipBuild -WithModels
@@ -47,9 +51,7 @@ jobs:
           name: voicetype-win-x64
           path: |
             dist/voicetype-win-x64-portable.zip
-            dist/voicetype-win-x64-portable-with-models.zip
             dist/voicetype-setup-x64.exe
-            dist/voicetype-setup-x64-with-models.exe
             dist/voicetype-tray.exe
             dist/*.sha256
 
@@ -61,11 +63,7 @@ jobs:
           files: |
             dist/voicetype-win-x64-portable.zip
             dist/voicetype-win-x64-portable.zip.sha256
-            dist/voicetype-win-x64-portable-with-models.zip
-            dist/voicetype-win-x64-portable-with-models.zip.sha256
             dist/voicetype-setup-x64.exe
             dist/voicetype-setup-x64.exe.sha256
-            dist/voicetype-setup-x64-with-models.exe
-            dist/voicetype-setup-x64-with-models.exe.sha256
             dist/voicetype-tray.exe
             dist/voicetype-tray.exe.sha256

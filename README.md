@@ -79,7 +79,7 @@ voicetype vad-session --from-file test.wav --vad-model models/silero_vad.onnx \
 推荐 sherpa-onnx 流式中文模型（已验证）：
 `sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23`（int8 约 14MB，来源
 https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models ）。
-获取方式见下文「模型获取方式」——应用内一键下载 / 脚本 / 手动放置均可。
+模型已内置，无需手动下载，详见下文「模型」一节。
 
 ## 打包与分发
 
@@ -98,13 +98,11 @@ Release 资产（全部附 `.sha256` 清单）：
 
 | 资产 | 说明 |
 | --- | --- |
-| `voicetype-tray.exe` | **便携版（推荐首装入口）**：单文件即装即用，模型在应用内一键下载 |
-| `voicetype-setup-x64-with-models.exe` | **安装版（含模型）**：模型已内嵌，安装完成即可用 |
-| `voicetype-setup-x64.exe` | **安装版**：Inno Setup 向导，按用户安装到 `%LocalAppData%\VoiceType`（无需管理员），可选开机自启，装完可一键下载模型 |
-| `voicetype-win-x64-portable-with-models.zip` | 便携版（含模型）zip 变体：离线场景备选 |
-| `voicetype-win-x64-portable.zip` | 便携版 zip 变体：与裸 exe 等价，多带一份文档和备用脚本 |
+| `voicetype-tray.exe` | **便携版（推荐首装入口）**：单文件即装即用，识别模型已内置 |
+| `voicetype-setup-x64.exe` | **安装版**：Inno Setup 向导，按用户安装，可选开机自启，模型已内置 |
+| `voicetype-win-x64-portable.zip` | 便携版 zip 变体：与裸 exe 等价，多带一份说明文档 |
 
-便携版使用：下载 `voicetype-tray.exe` → 运行 → 主界面自动弹出（双击托盘图标可再次打开）→ 点击「下载语音模型」→ 完成。
+便携版使用：下载 `voicetype-tray.exe` → 双击运行即可。识别模型已内置，首次启动自动解压到 exe 旁 models\（无需联网）。
 （该文件同时是热更新的下载目标，首装与热更同源。）
 
 ## 图标
@@ -123,17 +121,18 @@ Release 资产（全部附 `.sha256` 清单）：
 - **更新与公告**：检查更新、更新公告浏览
 - **开机自动启动**：写入 HKCU Run（按用户级别）
 
-## 模型获取方式
+## 模型
 
-三种方式任选，布局一致（`models\<识别模型子目录>\*.onnx` + `models\silero_vad.onnx`），可互相混用：
+识别模型随 exe 内置（`sherpa-onnx-streaming-zipformer-small-bilingual-zh-en-2023-02-16`，
+中英双语流式 int8，约 50MB）：首次启动自动解压到 exe 旁 models\（目录不可写时回落
+`%LOCALAPPDATA%\VoiceType\models`），之后无需联网。
 
-1. **应用内一键下载**（推荐）：托盘右键 → 「下载语音模型…」，自动下载约 15MB 并解压就位，进度显示在悬浮条。
-2. **脚本下载**：exe 旁执行 `.\setup-models.ps1`（幂等，已存在的模型自动跳过）。
-3. **手动放置**：从 https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models 下载
-   `sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23`（int8）解压到 `models\`，
-   并下载 `silero_vad.onnx` 放到 `models\`。
+模型源文件不入 git；构建/打包前由 `scripts/prepare-models.ps1` 下载到
+`apps/tray/embedded-models/`，经 `--features embedded-models` 编译期嵌入。
+开发构建（不带该 feature）仍从 models\ 目录加载。
 
-模型目录解析顺序：`VOICETYPE_MODEL_DIR` 环境变量 > exe 旁 `models\` > 工作目录 `models\`。
+模型目录解析顺序：`VOICETYPE_MODEL_DIR` 环境变量 > exe 旁 models\ >
+`%LOCALAPPDATA%\VoiceType\models` > 工作目录 models\。
 
 ## 热更新与更新公告
 
