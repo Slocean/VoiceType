@@ -135,6 +135,8 @@ fn create_engine(
     joiner: Option<PathBuf>,
     tokens: Option<PathBuf>,
 ) -> Result<Box<dyn StreamingAsr>, Box<dyn std::error::Error>> {
+    #[cfg(not(feature = "sherpa"))]
+    let _ = (&encoder, &decoder, &joiner, &tokens);
     match engine {
         "mock" => Ok(Box::new(MockAsr::new(mock_text))),
         #[cfg(feature = "sherpa")]
@@ -264,7 +266,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tokens,
             vad_model,
         } => {
-            use voicetype_asr::{MockAsr, MockVad, Utterance, VoiceSession};
+            use voicetype_asr::{MockAsr, MockVad, VoiceSession};
+
+            #[cfg(not(feature = "sherpa"))]
+            let _ = (&encoder, &decoder, &joiner, &tokens, &vad_model);
 
             let pcm = voicetype_audio::load_wav(&from_file)?;
             let stats = voicetype_audio::analyze(&pcm);

@@ -1,7 +1,7 @@
 //! 流式采集：音频回调线程内完成混声道与增量重采样，
 //! 以 16kHz 单声道块的形式持续回调给上层（供流式 ASR 实时消费）。
 
-use crate::{mix_to_mono, AudioError, TARGET_SAMPLE_RATE};
+use crate::{build_input_f32_stream, mix_to_mono, AudioError, TARGET_SAMPLE_RATE};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use std::sync::{Arc, Mutex};
 
@@ -79,25 +79,23 @@ impl AudioStream {
         let err = Arc::clone(&runtime_error);
 
         let mut on_chunk = on_chunk;
-        let stream = device
-            .build_input_stream(
-                &config.config(),
-                move |data: &[f32], _| {
-                    let mono = mix_to_mono(data, channels);
-                    let mut out = Vec::with_capacity(mono.len() / 2 + 2);
-                    resampler.push(&mono, &mut out);
-                    if !out.is_empty() {
-                        on_chunk(&out);
-                    }
-                },
-                move |e| {
-                    if let Ok(mut slot) = err.lock() {
-                        *slot = Some(e.to_string());
-                    }
-                },
-                None,
-            )
-            .map_err(|e| AudioError::Stream(e.to_string()))?;
+        let stream = build_input_f32_stream(
+            &device,
+            &config,
+            move |data: &[f32]| {
+                let mono = mix_to_mono(data, channels);
+                let mut out = Vec::with_capacity(mono.len() / 2 + 2);
+                resampler.push(&mono, &mut out);
+                if !out.is_empty() {
+                    on_chunk(&out);
+                }
+            },
+            move |e| {
+                if let Ok(mut slot) = err.lock() {
+                    *slot = Some(e.to_string());
+                }
+            },
+        )?;
         stream.play().map_err(|e| AudioError::Stream(e.to_string()))?;
 
         Ok(Self {
@@ -112,5 +110,10 @@ impl AudioStream {
             return Err(AudioError::Runtime(e));
         }
         Ok(())
+    }
+
+    /// 录音 worker 周期性读取并清除设备断开等运行错误。
+    pub fn take_runtime_error(&self) -> Option<String> {
+        self.runtime_error.lock().ok()?.take()
     }
 }

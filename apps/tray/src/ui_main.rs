@@ -11,17 +11,15 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{HOT_KEY_MODIFIERS, RegisterHot
 pub fn toggle_recording(main_hwnd: HWND) {
     with_app(|app| {
         if app.recording {
-            // 手动停止：通知 worker 退出，同时撤销已上屏的中间结果。
-            if let Some(tx) = app.cmd_tx.take() {
+            // 手动停止：由 worker 冲刷识别结果，随后按正常 Final/Empty 路径收尾。
+            if app.stopping {
+                return;
+            }
+            app.stopping = true;
+            if let Some(tx) = &app.cmd_tx {
                 let _ = tx.send(Cmd::Stop);
             }
-            if let Some(h) = app.worker.take() {
-                let _ = h.join();
-            }
-            app.ev_rx = None;
-            app.recording = false;
-            let _ = app.hybrid.cancel();
-            set_overlay_idle(app.overlay_text);
+            set_window_text(app.overlay_text, "正在结束录音并生成定稿…");
             return;
         }
         // 模型随 exe 内置，正常情况下首次启动已解压；走到这里说明磁盘不可写等异常。
@@ -70,7 +68,6 @@ pub fn toggle_recording(main_hwnd: HWND) {
             asr_cfg,
             vad_model,
             cmd_rx,
-            cmd_tx.clone(),
         ) {
             Ok(handle) => {
                 app.cmd_tx = Some(cmd_tx);
@@ -116,32 +113,41 @@ pub fn drain_worker_events() {
                     }
                     set_window_text(app.overlay_text, &format!("🎤 {text}"));
                     if app.mode == InjectMode::Hybrid {
-                        let _ = app.hybrid.update_interim(&text);
+                        if let Err(e) = app.hybrid.update_interim(&text) {
+                            diagnostics::record("ERROR", "injection", &e.to_string());
+                            set_window_text(app.overlay_text, &format!("实时上屏失败：{e}"));
+                        }
                     }
                 });
             }
             Ev::Final(text) => {
                 with_app(|app| {
                     app.recording = false;
+                    app.stopping = false;
+                    app.cmd_tx = None;
                     app.ev_rx = None;
                     if let Some(h) = app.worker.take() {
                         let _ = h.join();
                     }
-                    set_overlay_idle(app.overlay_text);
-                    match app.mode {
+                    set_overlay_idle(app.overlay_text, &app.hotkey_name);
+                    let result = match app.mode {
                         InjectMode::Paste => {
-                            let _ = ClipboardInjector::default().inject(&text);
+                            ClipboardInjector::default().inject(&text)
                         }
                         InjectMode::Type => {
-                            let _ = TypingInjector::default().inject(&text);
+                            TypingInjector::default().inject(&text)
                         }
                         InjectMode::Hybrid => {
-                            let _ = if text.is_empty() {
+                            if text.is_empty() {
                                 app.hybrid.cancel()
                             } else {
                                 app.hybrid.commit(&text)
-                            };
+                            }
                         }
+                    };
+                    if let Err(e) = result {
+                        diagnostics::record("ERROR", "injection", &e.to_string());
+                        set_window_text(app.overlay_text, &format!("文本注入失败：{e}"));
                     }
                 });
             }
@@ -149,6 +155,8 @@ pub fn drain_worker_events() {
             Ev::Empty => {
                 with_app(|app| {
                     app.recording = false;
+                    app.stopping = false;
+                    app.cmd_tx = None;
                     app.ev_rx = None;
                     if let Some(h) = app.worker.take() {
                         let _ = h.join();
@@ -161,8 +169,11 @@ pub fn drain_worker_events() {
                 });
             }
             Ev::Error(msg) => {
+                diagnostics::record("ERROR", "recording", &msg);
                 with_app(|app| {
                     app.recording = false;
+                    app.stopping = false;
+                    app.cmd_tx = None;
                     app.ev_rx = None;
                     if let Some(h) = app.worker.take() {
                         let _ = h.join();
@@ -323,9 +334,14 @@ fn overlay_text_of(hwnd: HWND) -> HWND {
 
 /// 应用新的录音热键：先注销旧的，注册成功才更新状态与托盘提示；
 /// 失败（冲突/被占用）时回退注册原热键，返回 false 供 UI 提示。
-pub fn apply_new_hotkey(hwnd: HWND, vk: u32, mods: u32) -> bool {
+pub fn apply_new_hotkey(vk: u32, mods: u32) -> bool {
+    let hwnd = with_app(|app| app.main_hwnd).unwrap_or_default();
+    if hwnd.is_invalid() {
+        return false;
+    }
     unsafe {
-        let _ = UnregisterHotKey(None, HOTKEY_ID);
+        // 注册和注销必须使用同一窗口句柄，否则旧热键会继续生效。
+        let _ = UnregisterHotKey(Some(hwnd), HOTKEY_ID);
         if RegisterHotKey(Some(hwnd), HOTKEY_ID, HOT_KEY_MODIFIERS(mods | MOD_NOREPEAT.0), vk).is_ok() {
             with_app(|app| {
                 app.hotkey_vk = vk;
@@ -366,14 +382,17 @@ fn update_tray_tip(hwnd: HWND) {
     }
 }
 
-fn set_overlay_idle(overlay_text: HWND) {
-    let name = with_app(|app| app.hotkey_name.clone()).unwrap_or_default();
+fn set_overlay_idle(overlay_text: HWND, name: &str) {
     set_window_text(overlay_text, &format!("🎤 就绪 — 按 {name} 开始说话"));
 }
 
 /// 更新后台任务完成：主界面开着则把公告写进窗口，否则弹窗；可应用时询问重启。
 fn handle_update_event(hwnd: HWND) {
     let Some(ev) = updater::take_update_event() else { return };
+    if !ev.ok {
+        diagnostics::record("ERROR", "updater", &ev.text);
+    }
+    settings::refresh_update_status();
     if ev.ok && !ev.ready && settings::fill_announcement(&ev.text) {
         return;
     }
@@ -432,7 +451,7 @@ pub(crate) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
             LRESULT(0)
         }
         WM_NOTIFY => {
-            settings::on_notify(lparam);
+            settings::on_notify(hwnd, lparam);
             LRESULT(0)
         }
         WM_TRAY_CALLBACK => {
@@ -466,7 +485,7 @@ pub(crate) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
         WM_DESTROY => {
             // 退出前收尾：移除托盘、停掉进行中的录音。
             remove_tray_icon(hwnd);
-            let _ = UnregisterHotKey(None, HOTKEY_ID);
+            let _ = UnregisterHotKey(Some(hwnd), HOTKEY_ID);
             with_app(|app| {
                 if app.recording {
                     if let Some(tx) = app.cmd_tx.take() {
@@ -562,12 +581,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             *a.borrow_mut() = Some(App {
                 mode: InjectMode::Hybrid,
                 recording: false,
+                stopping: false,
                 cmd_tx: None,
                 ev_rx: None,
                 worker: None,
                 overlay,
                 overlay_text,
                 hybrid: HybridInjector::default(),
+                main_hwnd: hwnd,
                 settings: HWND::default(),
                 hotkey_vk: 0x78,
                 hotkey_mods: 0,
@@ -611,7 +632,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             show_tray_balloon(
                 hwnd,
                 "VoiceType 已在后台运行",
-                "主界面已打开：可一键下载语音模型。按 F9 开始语音输入。",
+                "主界面已打开：内置模型未就绪，请检查磁盘空间或安装目录权限。",
             );
         }
 

@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::Duration;
@@ -28,12 +28,11 @@ pub fn start_worker(
     asr_config: voicetype_asr::SherpaAsrConfig,
     vad_model: PathBuf,
     cmd_rx: Receiver<Cmd>,
-    _cmd_tx: Sender<Cmd>,
 ) -> Result<WorkerHandle, String> {
     use std::sync::mpsc;
 
     let (ev_tx, ev_rx) = mpsc::channel::<Ev>();
-    // done 置位即请求 worker 退出（手动停止）；VAD 自动断句时由内部置位。
+    // done 置位即请求 worker 退出；VAD 自动断句时由音频回调置位。
     let done = Arc::new(AtomicBool::new(false));
 
     let handle = std::thread::spawn({
@@ -91,19 +90,54 @@ pub fn start_worker(
                     }
                 }
             });
-            if stream.is_err() {
-                let _ = ev_tx.send(Ev::Error("打开麦克风失败".into()));
-                notify.post(WM_WORKER_EVENT);
-                return;
-            }
+            let stream = match stream {
+                Ok(stream) => stream,
+                Err(e) => {
+                    let _ = ev_tx.send(Ev::Error(format!("打开麦克风失败: {e}")));
+                    notify.post(WM_WORKER_EVENT);
+                    return;
+                }
+            };
 
             // 等待退出条件：VAD 自动断句（done 置位）或手动停止（Cmd::Stop）。
+            let mut manual_stop = false;
             loop {
                 if done.load(Ordering::SeqCst) {
                     break;
                 }
-                if cmd_rx.recv_timeout(Duration::from_millis(100)).is_ok() {
+                if let Some(e) = stream.take_runtime_error() {
+                    let _ = ev_tx.send(Ev::Error(format!("麦克风运行失败: {e}")));
+                    notify.post(WM_WORKER_EVENT);
                     break;
+                }
+                match cmd_rx.recv_timeout(Duration::from_millis(100)) {
+                    Ok(Cmd::Stop) => {
+                        manual_stop = true;
+                        break;
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                }
+            }
+            if let Err(e) = stream.stop() {
+                let _ = ev_tx.send(Ev::Error(format!("麦克风运行失败: {e}")));
+                notify.post(WM_WORKER_EVENT);
+                return;
+            }
+            if manual_stop && !done.load(Ordering::SeqCst) {
+                let result = session
+                    .lock()
+                    .map_err(|_| "识别会话锁已损坏".to_string())
+                    .and_then(|mut s| s.finish_manual().map_err(|e| e.to_string()));
+                let event = match result {
+                    Ok(Some(Utterance::Final(text))) => Some(Ev::Final(text)),
+                    Ok(Some(Utterance::Empty)) => Some(Ev::Empty),
+                    Ok(Some(Utterance::Interim(_))) | Ok(None) => None,
+                    Err(e) => Some(Ev::Error(format!("生成定稿失败: {e}"))),
+                };
+                if let Some(event) = event {
+                    let _ = ev_tx.send(event);
+                    notify.post(WM_WORKER_EVENT);
                 }
             }
         }

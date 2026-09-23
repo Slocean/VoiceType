@@ -9,6 +9,7 @@
 //! 便携版与安装版的区分：安装版目录里有 Inno Setup 写入的 `install.mode` 标记。
 
 use std::io::Read;
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -28,7 +29,7 @@ const APP_UPDATE_URL: &str =
 const RELEASES_PAGE_URL: &str = "https://github.com/Slocean/VoiceType/releases";
 const USER_AGENT: &str = concat!("VoiceType/", env!("CARGO_PKG_VERSION"));
 
-/// 便携版热更资产：裸 exe（模型单独下载，不进热更范围）。
+/// 便携版热更资产：内置模型的裸 exe。
 const PORTABLE_ASSET: &str = "voicetype-tray.exe";
 /// 安装版热更资产：Inno Setup 安装包。
 const INSTALLER_ASSET: &str = "voicetype-setup-x64.exe";
@@ -95,15 +96,17 @@ fn exe_dir() -> Option<PathBuf> {
     std::env::current_exe().ok()?.parent().map(Path::to_path_buf)
 }
 
-fn version_tuple(text: &str) -> Vec<u32> {
-    let t = text.trim().trim_start_matches('v');
-    t.split('.')
-        .map(|p| p.trim().parse().unwrap_or(0))
-        .collect()
+fn version_tuple(text: &str) -> Result<[u32; 3], String> {
+    let parts: Vec<_> = text.trim().split('.').collect();
+    if parts.len() != 3 || parts.iter().any(|part| part.is_empty() || !part.bytes().all(|c| c.is_ascii_digit())) {
+        return Err(format!("版本号格式错误，应为 X.Y.Z：{text}"));
+    }
+    let parse = |part: &str| part.parse::<u32>().map_err(|_| format!("版本号超出范围：{text}"));
+    Ok([parse(parts[0])?, parse(parts[1])?, parse(parts[2])?])
 }
 
-fn version_gt(remote: &str, local: &str) -> bool {
-    version_tuple(remote) > version_tuple(local)
+fn version_gt(remote: &str, local: &str) -> Result<bool, String> {
+    Ok(version_tuple(remote)? > version_tuple(local)?)
 }
 
 fn http_get(url: &str, timeout: std::time::Duration) -> Result<Vec<u8>, String> {
@@ -201,8 +204,8 @@ pub fn check_update() -> Result<CheckResult, String> {
     let Some(entry) = channel.history.first() else {
         return Err("更新通道为空".into());
     };
-    let latest = entry.version.trim().trim_start_matches('v').to_string();
-    let available = version_gt(&latest, APP_VERSION);
+    let latest = entry.version.trim().to_string();
+    let available = version_gt(&latest, APP_VERSION)?;
     let (download_url, checksum_url) = if available {
         let api = format!(
             "https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/releases/tags/v{latest}"
@@ -483,7 +486,7 @@ impl NotifyHwnd {
     }
 }
 
-pub static UPDATE_STATE: Mutex<Option<UpdateEvent>> = Mutex::new(None);
+pub static UPDATE_STATE: Mutex<VecDeque<UpdateEvent>> = Mutex::new(VecDeque::new());
 
 /// 后台线程入口：检查 →（有更新则）下载校验，完成后 PostMessage 通知主线程弹窗。
 /// 进行中时重复触发直接忽略（托盘菜单/主界面按钮双击防护）。
@@ -532,7 +535,7 @@ pub fn spawn_check_and_download(hwnd: isize) {
             },
         };
         if let Ok(mut st) = UPDATE_STATE.lock() {
-            *st = Some(event);
+            st.push_back(event);
         }
         notify.post();
         CHECKING.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -556,12 +559,34 @@ pub fn spawn_fetch_announcement(hwnd: isize) {
             },
         };
         if let Ok(mut st) = UPDATE_STATE.lock() {
-            *st = Some(event);
+            st.push_back(event);
         }
         notify.post();
     });
 }
 
 pub fn take_update_event() -> Option<UpdateEvent> {
-    UPDATE_STATE.lock().ok()?.take()
+    UPDATE_STATE.lock().ok()?.pop_front()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn versions_compare_numerically_and_reject_malformed_channel_values() {
+        assert!(version_gt("1.10.0", "1.9.9").unwrap());
+        assert!(!version_gt("1.2.0", "1.2.0").unwrap());
+        for invalid in ["", "v1.2.3", "1.2", "1.2.3.4", "1.x.3", "1.2.3-beta"] {
+            assert!(version_gt(invalid, "1.2.0").is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn checksum_manifest_only_accepts_matching_asset() {
+        let valid = format!("{}  voicetype-tray.exe\n", "a".repeat(64));
+        assert_eq!(parse_checksum_manifest(valid.as_bytes(), PORTABLE_ASSET).unwrap(), "a".repeat(64));
+        assert!(parse_checksum_manifest(valid.as_bytes(), INSTALLER_ASSET).is_err());
+        assert!(parse_checksum_manifest(b"abc  voicetype-tray.exe\n", PORTABLE_ASSET).is_err());
+    }
 }

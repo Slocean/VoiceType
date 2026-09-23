@@ -7,3 +7,5 @@ scripts/models/
 dist/
 
 apps/tray/embedded-models/
+__pycache__/
+*.pyc

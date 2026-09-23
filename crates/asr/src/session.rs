@@ -101,6 +101,32 @@ impl<V: Vad, A: StreamingAsr> VoiceSession<V, A> {
         Ok(out)
     }
 
+    /// 用户主动结束录音时，冲刷当前流式结果并产出一次定稿。
+    pub fn finish_manual(&mut self) -> Result<Option<Utterance>, AsrError> {
+        if self.closed {
+            return Ok(None);
+        }
+        self.closed = true;
+        if !self.vad.seen_speech() {
+            return Ok(Some(Utterance::Empty));
+        }
+        self.asr.finish()?;
+        let mut text = String::new();
+        while let Some(result) = self.asr.take_result()? {
+            if result.is_final {
+                text = result.text;
+            }
+        }
+        if text.is_empty() {
+            text = self.last_interim.clone();
+        }
+        Ok(Some(if text.is_empty() {
+            Utterance::Empty
+        } else {
+            Utterance::Final(text)
+        }))
+    }
+
     /// 对 VAD 切出的语音段做识别：重置 ASR 上下文后从零识别该段，
     /// finish 冲刷定稿。重置是必须的——流式引擎上下文里还留着
     /// 实时 Interim 阶段喂入的音频，不重置会把跨段内容拼进定稿。
@@ -174,5 +200,19 @@ mod tests {
         s.accept_samples(&CHUNK).unwrap();
         assert!(s.is_closed());
         assert_eq!(s.accept_samples(&CHUNK).unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn manual_stop_emits_final_once() {
+        let mut s = session();
+        s.accept_samples(&CHUNK).unwrap();
+        assert_eq!(s.finish_manual().unwrap(), Some(Utterance::Final("你好".into())));
+        assert_eq!(s.finish_manual().unwrap(), None);
+    }
+
+    #[test]
+    fn manual_stop_without_speech_is_empty() {
+        let mut s = session();
+        assert_eq!(s.finish_manual().unwrap(), Some(Utterance::Empty));
     }
 }

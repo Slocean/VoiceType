@@ -35,8 +35,9 @@ Release 页确认 6 个资产齐全（两种安装形态 + 裸 exe + 三个 `.sh
 | `apps/tray/src/models_dl.rs` | 内置模型首次启动解压（include_bytes! + 幂等落盘） |
 | `apps/tray/src/settings.rs` | 主界面窗口（模式/模型/更新/公告/自启；关闭=隐藏复用） |
 | `scripts/package.ps1` | 三产物打包（模型内嵌）+ `.sha256` 清单生成 |
-| `scripts/installer.iss` | 安装版打包脚本（写 `install.mode` 标记；`/DModelsDir` 内嵌模型） |
+| `scripts/installer.iss` | 安装版打包脚本（写 `install.mode` 标记；与界面共用 HKCU Run 自启设置） |
 | `assets/icon.svg` + `scripts/make_icon.py` | 图标设计源与 ICO 生成（exe/安装包/托盘统一） |
 | `scripts/prepare-models.ps1` | 构建前准备内置模型源文件（下载/解出到 embedded-models） |
 | `scripts/release_notes.py` | 从通道生成 Release 公告正文 |
+| `scripts/verify_release.py` | 发布门禁：版本、资产、SHA-256、便携包一致性 |
 | `.github/workflows/release.yml` | tag 触发的构建发布流水线 |

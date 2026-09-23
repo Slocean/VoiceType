@@ -9,6 +9,7 @@ pub mod stream;
 pub use stream::{AudioStream, StreamingResampler};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::{FromSample, SampleFormat, SizedSample};
 use std::sync::{Arc, Mutex};
 
 /// ASR 引擎要求的目标采样率。
@@ -24,6 +25,61 @@ pub enum AudioError {
     Stream(String),
     #[error("音频流运行错误: {0}")]
     Runtime(String),
+}
+
+/// 按设备的真实采样格式建流，并把回调统一转换为 f32。
+fn build_typed_input_stream<T, D, E>(
+    device: &cpal::Device,
+    config: &cpal::StreamConfig,
+    mut on_data: D,
+    on_error: E,
+) -> Result<cpal::Stream, AudioError>
+where
+    T: SizedSample + Copy,
+    f32: FromSample<T>,
+    D: FnMut(&[f32]) + Send + 'static,
+    E: FnMut(cpal::StreamError) + Send + 'static,
+{
+    device
+        .build_input_stream(
+            config,
+            move |data: &[T], _| {
+                let converted: Vec<f32> = data
+                    .iter()
+                    .map(|sample| sample.to_sample::<f32>())
+                    .collect();
+                on_data(&converted);
+            },
+            on_error,
+            None,
+        )
+        .map_err(|e| AudioError::Stream(e.to_string()))
+}
+
+pub(crate) fn build_input_f32_stream<D, E>(
+    device: &cpal::Device,
+    config: &cpal::SupportedStreamConfig,
+    on_data: D,
+    on_error: E,
+) -> Result<cpal::Stream, AudioError>
+where
+    D: FnMut(&[f32]) + Send + 'static,
+    E: FnMut(cpal::StreamError) + Send + 'static,
+{
+    let stream_config = config.config();
+    match config.sample_format() {
+        SampleFormat::I8 => build_typed_input_stream::<i8, _, _>(device, &stream_config, on_data, on_error),
+        SampleFormat::I16 => build_typed_input_stream::<i16, _, _>(device, &stream_config, on_data, on_error),
+        SampleFormat::I32 => build_typed_input_stream::<i32, _, _>(device, &stream_config, on_data, on_error),
+        SampleFormat::I64 => build_typed_input_stream::<i64, _, _>(device, &stream_config, on_data, on_error),
+        SampleFormat::U8 => build_typed_input_stream::<u8, _, _>(device, &stream_config, on_data, on_error),
+        SampleFormat::U16 => build_typed_input_stream::<u16, _, _>(device, &stream_config, on_data, on_error),
+        SampleFormat::U32 => build_typed_input_stream::<u32, _, _>(device, &stream_config, on_data, on_error),
+        SampleFormat::U64 => build_typed_input_stream::<u64, _, _>(device, &stream_config, on_data, on_error),
+        SampleFormat::F32 => build_typed_input_stream::<f32, _, _>(device, &stream_config, on_data, on_error),
+        SampleFormat::F64 => build_typed_input_stream::<f64, _, _>(device, &stream_config, on_data, on_error),
+        other => Err(AudioError::Config(format!("不支持的麦克风采样格式: {other}"))),
+    }
 }
 
 /// 一次录音会话。`start` 开始采集，`stop` 返回 16kHz 单声道 PCM。
@@ -51,22 +107,20 @@ impl AudioCapture {
 
         let buf = Arc::clone(&buffer);
         let err = Arc::clone(&runtime_error);
-        let stream = device
-            .build_input_stream(
-                &config.config(),
-                move |data: &[f32], _| {
-                    if let Ok(mut b) = buf.lock() {
-                        b.extend_from_slice(data);
-                    }
-                },
-                move |e| {
-                    if let Ok(mut slot) = err.lock() {
-                        *slot = Some(e.to_string());
-                    }
-                },
-                None,
-            )
-            .map_err(|e| AudioError::Stream(e.to_string()))?;
+        let stream = build_input_f32_stream(
+            &device,
+            &config,
+            move |data: &[f32]| {
+                if let Ok(mut b) = buf.lock() {
+                    b.extend_from_slice(data);
+                }
+            },
+            move |e| {
+                if let Ok(mut slot) = err.lock() {
+                    *slot = Some(e.to_string());
+                }
+            },
+        )?;
         stream.play().map_err(|e| AudioError::Stream(e.to_string()))?;
 
         Ok(Self {

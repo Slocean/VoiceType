@@ -1967,7 +1967,7 @@ dependencies = [
 name = "voicetype-inject"
 version = "0.1.0"
 dependencies = [
- "arboard",
+ "clipboard-win",
  "thiserror 2.0.20",
  "windows 0.62.2",
 ]

@@ -25,19 +25,52 @@ $version = (Select-String -Path "apps\tray\Cargo.toml" -Pattern '^version = "(.+
 Write-Host "打包版本: v$version"
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null
+$OutDir = (Resolve-Path -LiteralPath $OutDir).Path
 $assets = @()
 
+# 使用隔离的空模型目录验证实际 exe，阻止误把无内置模型的开发构建打包发布。
+$smokeDir = Join-Path $OutDir ("voicetype-smoke-" + [Guid]::NewGuid().ToString("N"))
+$outPrefix = $OutDir.TrimEnd([IO.Path]::DirectorySeparatorChar) + [IO.Path]::DirectorySeparatorChar
+if (-not $smokeDir.StartsWith($outPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "自检临时目录不在输出目录内: $smokeDir"
+}
+$previousModelDir = $env:VOICETYPE_MODEL_DIR
+try {
+    $env:VOICETYPE_MODEL_DIR = $smokeDir
+    & $exe --self-check
+    if ($LASTEXITCODE -ne 0) { throw "实际 exe 的内置模型解压或识别引擎初始化失败（退出码 $LASTEXITCODE）" }
+} finally {
+    $env:VOICETYPE_MODEL_DIR = $previousModelDir
+    if (Test-Path -LiteralPath $smokeDir) { Remove-Item -LiteralPath $smokeDir -Recurse -Force }
+}
+
+# 清理上次打包的协议资产，避免安装包缺失时误把旧文件上传为新版。
+foreach ($name in @(
+    "voicetype-win-x64-portable.zip",
+    "voicetype-setup-x64.exe",
+    "voicetype-tray.exe"
+)) {
+    foreach ($path in @((Join-Path $OutDir $name), (Join-Path $OutDir "$name.sha256"))) {
+        if (Test-Path -LiteralPath $path) { Remove-Item -LiteralPath $path -Force }
+    }
+}
+
 # ---------- 便携版（zip，手动下载/首次安装用）----------
-$pkg = Join-Path $OutDir "voicetype-win-x64"
-if (Test-Path $pkg) { Remove-Item $pkg -Recurse -Force }
-New-Item -ItemType Directory -Force $pkg | Out-Null
-Copy-Item $exe $pkg\ -Force
-Copy-Item README.md $pkg\ -Force
-# 更新通道本地副本：离线时应用仍有公告可看。
-Copy-Item app_update.json $pkg\ -Force
+$pkg = Join-Path $OutDir ("voicetype-stage-" + [Guid]::NewGuid().ToString("N"))
+if (-not $pkg.StartsWith($outPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "临时打包目录不在输出目录内: $pkg"
+}
 $portableZip = Join-Path $OutDir "voicetype-win-x64-portable.zip"
-Compress-Archive -Path (Join-Path $pkg "*") -DestinationPath $portableZip -Force
-Remove-Item $pkg -Recurse -Force
+New-Item -ItemType Directory -Path $pkg | Out-Null
+try {
+    Copy-Item $exe -Destination $pkg -Force
+    Copy-Item README.md -Destination $pkg -Force
+    # 更新通道本地副本：离线时应用仍有公告可看。
+    Copy-Item app_update.json -Destination $pkg -Force
+    Compress-Archive -Path (Join-Path $pkg "*") -DestinationPath $portableZip -Force
+} finally {
+    Remove-Item -LiteralPath $pkg -Recurse -Force
+}
 $assets += $portableZip
 
 # ---------- 便携版热更资产（裸 exe，热更新只替换这一个文件）----------
@@ -60,7 +93,7 @@ if (-not $SkipInstaller) {
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $assets += (Join-Path $OutDir "voicetype-setup-x64.exe")
     } else {
-        Write-Warning "未找到 Inno Setup（ISCC.exe），跳过安装包。可 choco install innosetup -y 后重跑。"
+        throw "未找到 Inno Setup（ISCC.exe）；安装包是发布必需资产。请安装后重跑，或明确使用 -SkipInstaller。"
     }
 }
 

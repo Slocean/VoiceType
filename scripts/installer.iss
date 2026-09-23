@@ -23,6 +23,8 @@ DefaultDirName={localappdata}\{#AppName}
 DisableProgramGroupPage=yes
 ; 按用户安装，热更静默重装也不需要提权。
 PrivilegesRequired=lowest
+; 热更新静默重装遵循应用内当前自启状态，不重放初次安装时的勾选。
+UsePreviousTasks=no
 OutputDir=..\dist
 OutputBaseFilename={#OutBase}
 Compression=lzma2/max
@@ -48,7 +50,10 @@ Source: "..\app_update.json"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{userprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
-Name: "{userstartup}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: autostart
+
+[Registry]
+; 与应用设置共用同一个自启入口，避免快捷方式和 Run 同时启动两份实例。
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "VoiceType"; ValueData: """{app}\{#AppExeName}"""; Tasks: autostart; Flags: uninsdeletevalue
 
 [Run]
 ; 不带 skipifsilent：静默重装（热更新）结束后同样拉起新版。
@@ -59,3 +64,14 @@ Filename: "{app}\{#AppExeName}"; Flags: nowait runasoriginaluser
 Type: files; Name: "{app}\voicetype_update.verify.json"
 Type: files; Name: "{app}\voicetype_update.log"
 Type: files; Name: "{app}\voicetype-tray_update.exe"
+
+[Code]
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+  begin
+    { 仅当 Run 已生效时移除旧快捷方式；保留旧用户的自启选择。 }
+    if RegValueExists(HKEY_CURRENT_USER, 'Software\Microsoft\Windows\CurrentVersion\Run', 'VoiceType') then
+      DeleteFile(ExpandConstant('{userstartup}\VoiceType.lnk'));
+  end;
+end;

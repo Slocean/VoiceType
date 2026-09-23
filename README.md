@@ -17,11 +17,11 @@ apps/demo       # voicetype-demo（手动演示）+ selftest（注入层自动�
 ## 快速开始
 
 ```bash
-# 默认构建（Mock 引擎，不含模型）
-cargo build
+# 开发构建（托盘不内嵌模型，需另备 models 目录）
+cargo build --workspace
 
-# 启用 sherpa-onnx 本地识别引擎（首次构建自动下载预编译静态库）
-cargo build --features sherpa
+# 单独构建命令行的 sherpa-onnx 本地识别引擎
+cargo build -p voicetype-cli --features sherpa
 
 # 注入层自动化自测（自建窗口验证三种注入策略 + 剪贴板恢复）
 cargo run -p voicetype-demo --bin selftest
@@ -37,9 +37,10 @@ cargo run -p voicetype-tray
 ```
 
 - 按 **F9** 开始录音（悬浮条显示中间结果，hybrid 模式同步上屏到当前输入框），
-  再按 **F9** 结束并注入定稿；托盘双击图标同样可切换录音
+  再按 **F9** 结束并注入定稿；停顿后也会自动结束
 - 托盘右键菜单：粘贴模式 / 键入模式 / 混合模式（流式，默认）/ 退出
 - 悬浮条 topmost + 不抢焦点，不影响目标应用
+- 重复启动会打开已有实例的主界面，不会产生第二个托盘进程
 
 ## CLI 用法（诊断与验证）
 
@@ -70,28 +71,21 @@ voicetype vad-session --from-file test.wav --vad-model models/silero_vad.onnx \
 
 | 策略 | 说明 | 适用 |
 | ---- | ---- | ---- |
-| `paste`（默认） | 剪贴板备份 → 写入 → Ctrl+V → 异步恢复 | 绝大多数场景；原子操作，不触发目标应用按键副作用（@、#、/ 联想面板等） |
+| `paste` | 纯文本剪贴板备份 → 写入 → Ctrl+V → 条件恢复；原剪贴板含图片/富文本时改用 Unicode 键入 | 常规文本剪贴板可一次性粘贴，并避免覆盖用户随后复制的新内容 |
 | `type` | Win32 `SendInput` + `KEYEVENTF_UNICODE` 逐字注入 | 有实时打字感；粘贴失效时兜底 |
-| `hybrid` | 中间识别结果逐字上屏，定稿时撤销中间结果并一次性粘贴 | 流式识别，兼顾实时感与干净插入 |
-
-## 模型
-
-推荐 sherpa-onnx 流式中文模型（已验证）：
-`sherpa-onnx-streaming-zipformer-zh-14M-2023-02-23`（int8 约 14MB，来源
-https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models ）。
-模型已内置，无需手动下载，详见下文「模型」一节。
+| `hybrid`（托盘版默认） | 中间识别结果逐字上屏，定稿时撤销中间结果并注入最终文本 | 流式识别，兼顾实时感与干净插入 |
 
 ## 打包与分发
 
 ```bash
-# 本地打包（release 构建 → 便携/安装 × 标准/带模型 + 裸 exe → 全部生成 .sha256）
+# 本地打包（模型内置；便携 zip、安装包、裸 exe 均生成 .sha256）
 .\scripts\package.ps1                 # 产物在 dist\
-.\scripts\package.ps1 -WithModels     # 额外产出两种内嵌模型的变体
-.\scripts\package.ps1 -SkipBuild      # 跳过构建，仅重新收集
-.\scripts\package.ps1 -SkipInstaller  # 跳过安装包（未装 Inno Setup 时）
+.\scripts\package.ps1 -SkipBuild      # 跳过构建，但仍验证已有 exe 的内置模型
+.\scripts\package.ps1 -SkipInstaller  # 仅本地调试时跳过安装包
+python scripts/verify_release.py --dist dist  # 检查版本、资产、SHA-256 与便携包内容
 
 # GitHub Actions：推 v* tag 自动构建并发布 Release（也支持手动触发）
-git tag v0.3.0 && git push origin v0.3.0
+git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
 Release 资产（全部附 `.sha256` 清单）：
@@ -117,7 +111,7 @@ Release 资产（全部附 `.sha256` 清单）：
 
 - **注入模式**：粘贴 / 键入 / 混合（流式）三选一
 - **录音快捷键**：可自定义任意组合键，应用时自动检测冲突并回退；持久化到注册表
-- **语音模型**：状态显示 + 一键下载（约 15MB，进度在悬浮条）
+- **语音模型**：显示内置模型的就绪状态
 - **更新与公告**：检查更新、更新公告浏览
 - **开机自动启动**：写入 HKCU Run（按用户级别）
 
@@ -130,6 +124,7 @@ Release 资产（全部附 `.sha256` 清单）：
 模型源文件不入 git；构建/打包前由 `scripts/prepare-models.ps1` 下载到
 `apps/tray/embedded-models/`，经 `--features embedded-models` 编译期嵌入。
 开发构建（不带该 feature）仍从 models\ 目录加载。
+应用启动时按内置模型字节的 SHA-256 校验已落盘文件；同大小的损坏文件也会自动修复。
 
 模型目录解析顺序：`VOICETYPE_MODEL_DIR` 环境变量 > exe 旁 models\ >
 `%LOCALAPPDATA%\VoiceType\models` > 工作目录 models\。
@@ -141,6 +136,13 @@ Release 资产（全部附 `.sha256` 清单）：
 - **便携版热更**：替换 `voicetype-tray.exe` 后自动重启（参照 Nexuz 的 PowerShell 助手换文件方案）。
 - **安装版热更**：静默重装新版安装包（`/VERYSILENT /RESTARTAPPLICATIONS`）并自动拉起应用；安装版目录由 `install.mode` 标记区分。
 - **发版公告**：改 `app_update.json`（版本 + title + body）并 bump `apps/tray/Cargo.toml` 版本号，打 tag 推送；CI 用 `scripts/release_notes.py` 把该版本公告生成为 Release 正文。
+- **发布验收**：CI 核对版本、三个资产及其校验清单，并用最终便携 exe 的 `--self-check` 初始化真实 ASR/VAD 模型；任一步失败都会阻止发布。
+
+## 故障诊断
+
+托盘版将启动、模型解压、录音和更新错误写入
+`%LOCALAPPDATA%\VoiceType\logs\voicetype.log`。日志不记录音频或识别文本；超过 1 MB
+时轮换到 `voicetype.old.log`。反馈问题时可附上日志、应用版本和复现步骤。
 
 ## 路线图
 

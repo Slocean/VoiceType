@@ -11,7 +11,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{MapVirtualKeyW, MAPVK_VK_TO_VS
 use windows::Win32::UI::Input::KeyboardAndMouse::GetKeyNameTextW;
 use windows::Win32::System::Registry::{
     RegCloseKey, RegCreateKeyW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
-    HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_DWORD, REG_SZ, REG_VALUE_TYPE,
+    HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, REG_DWORD, REG_SZ, REG_VALUE_TYPE,
 };
 
 // ---------- 控件 ID ----------
@@ -20,7 +20,6 @@ const IDC_MODE_PASTE: i32 = 2001;
 const IDC_MODE_TYPE: i32 = 2002;
 const IDC_MODE_HYBRID: i32 = 2003;
 const IDC_MODEL_STATUS: i32 = 2010;
-const IDC_BTN_DOWNLOAD: i32 = 2011;
 const IDC_VER: i32 = 2012;
 const IDC_BTN_UPDATE: i32 = 2013;
 const IDC_BTN_ANNOUNCE: i32 = 2014;
@@ -48,7 +47,6 @@ const BM_SETCHECK: u32 = 0xF1;
 const BM_GETCHECK: u32 = 0xF2;
 const BST_CHECKED: WPARAM = WPARAM(1);
 const WM_SETFONT: u32 = 0x30;
-const WM_NOTIFY: u32 = 0x004E;
 const TCM_INSERTITEMW: u32 = 0x133E;
 const TCM_GETCURSEL: u32 = 0x130B;
 const TCIF_TEXT: u32 = 1;
@@ -81,6 +79,13 @@ const RUN_KEY: PCWSTR = w!("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
 const APP_KEY: PCWSTR = w!("Software\\VoiceType");
 const HOTKEY_VALUE: PCWSTR = w!("Hotkey");
 const DEFAULT_HOTKEY_VK: u32 = 0x78;
+
+fn legacy_startup_shortcut() -> Option<PathBuf> {
+    Some(
+        PathBuf::from(std::env::var_os("APPDATA")?)
+            .join(r"Microsoft\Windows\Start Menu\Programs\Startup\VoiceType.lnk"),
+    )
+}
 
 /// WM_NOTIFY 的 NMHDR 头（windows crate 该类型门控在未启用 feature 下，按内存布局读取）。
 #[repr(C)]
@@ -116,11 +121,11 @@ fn autostart_enabled() -> bool {
     unsafe {
         let mut hkey = HKEY::default();
         if RegOpenKeyExW(HKEY_CURRENT_USER, RUN_KEY, None, KEY_QUERY_VALUE, &mut hkey).0 != 0 {
-            return false;
+            return legacy_startup_shortcut().is_some_and(|path| path.is_file());
         }
         let ok = RegQueryValueExW(hkey, AUTOSTART_VALUE, None, None, None, None).0 == 0;
         let _ = RegCloseKey(hkey);
-        ok
+        ok || legacy_startup_shortcut().is_some_and(|path| path.is_file())
     }
 }
 
@@ -138,10 +143,18 @@ fn set_autostart(enable: bool) -> Result<(), String> {
                 Err(e) => Err(format!("定位 exe 失败: {e}")),
             }
         } else {
-            werr(RegDeleteValueW(hkey, AUTOSTART_VALUE))
+            let status = RegDeleteValueW(hkey, AUTOSTART_VALUE);
+            if status.0 == 2 { Ok(()) } else { werr(status) }
         };
         let _ = RegCloseKey(hkey);
-        result
+        result?;
+        if let Some(path) = legacy_startup_shortcut() {
+            if path.exists() {
+                std::fs::remove_file(&path)
+                    .map_err(|e| format!("移除旧版开机启动快捷方式失败: {e}"))?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -264,7 +277,7 @@ unsafe fn add_control(
 }
 
 /// 打开（或前置）主窗口。窗口只建一次，WM_CLOSE 时隐藏复用。
-pub unsafe fn show_settings(main_hwnd: HWND) {
+pub unsafe fn show_settings(_main_hwnd: HWND) {
     let existing = with_app(|app| app.settings).unwrap_or_default();
     if !existing.is_invalid() {
         let _ = ShowWindow(existing, SW_SHOW);
@@ -477,6 +490,15 @@ pub fn fill_announcement(text: &str) -> bool {
         return false;
     }
     let hwnd = with_app(|app| app.settings).unwrap_or_default();
+    let visible_update_page = unsafe {
+        IsWindowVisible(hwnd).as_bool()
+            && get_ctrl(hwnd, IDC_TAB).is_some_and(|tab| {
+                SendMessageW(tab, TCM_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0 == 1
+            })
+    };
+    if !visible_update_page {
+        return false;
+    }
     match get_ctrl(hwnd, IDC_ANNOUNCE_EDIT) {
         Some(ctrl) => {
             set_window_text(ctrl, text);
@@ -486,13 +508,13 @@ pub fn fill_announcement(text: &str) -> bool {
     }
 }
 
-pub fn refresh_model_status() {
+pub fn refresh_update_status() {
     if !is_open() {
         return;
     }
     let hwnd = with_app(|app| app.settings).unwrap_or_default();
-    if let Some(ctrl) = get_ctrl(hwnd, IDC_MODEL_STATUS) {
-        set_window_text(ctrl, &model_status_text());
+    if let Some(ctrl) = get_ctrl(hwnd, IDC_VER) {
+        set_window_text(ctrl, &format!("当前版本 v{}", updater::APP_VERSION));
     }
 }
 
@@ -525,7 +547,7 @@ pub unsafe fn on_command(hwnd: HWND, id: i32) {
                 return;
             }
             let mods = hotkeyf_to_mod(hotkeyf);
-            if ui_main::apply_new_hotkey(hwnd, vk, mods) {
+            if ui_main::apply_new_hotkey(vk, mods) {
                 // 成功：持久化 + 刷新显示。
                 let _ = save_hotkey(vk, mods);
                 if let Some(ctrl) = get_ctrl(hwnd, IDC_HOTKEY_NOW) {
@@ -591,7 +613,7 @@ pub unsafe fn on_command(hwnd: HWND, id: i32) {
 }
 
 /// Tab 切换：TCN_SELCHANGE 时整页显隐。
-pub unsafe fn on_notify(lparam: LPARAM) {
+pub unsafe fn on_notify(hwnd: HWND, lparam: LPARAM) {
     let hdr = lparam.0 as *const NotifyHeader;
     if hdr.is_null() {
         return;
@@ -599,6 +621,6 @@ pub unsafe fn on_notify(lparam: LPARAM) {
     let hdr = std::ptr::read_unaligned(hdr);
     if hdr.code == TCN_SELCHANGE && hdr.id_from == IDC_TAB as usize {
         let page = SendMessageW(hdr.hwnd_from, TCM_GETCURSEL, Some(WPARAM(0)), Some(LPARAM(0))).0;
-        set_page(hdr.hwnd_from, page as usize);
+        set_page(hwnd, page as usize);
     }
 }
