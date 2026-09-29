@@ -234,3 +234,35 @@
 - 不把模型文件存在、文件校验通过、引擎可初始化三个概念混用；不把“WebView 页面收到 JS”当成“用户看到了结果”。
 - 不以本地旧 dist 或已存在 tag 充当本次发布证据；不把编译、自检和单元测试通过推断为 GUI、安装版或热更新通过。
 - 发布流程和本文冲突时，优先保持 AGENTS.md 中资产协议、安全边界与版本一致性不变量；先修订本文再执行新的流程。
+
+## 12. 执行记录（2026-09-30，分支 codex/quality-recovery）
+
+### 已完成（按阶段 0→5 的代码工作）
+
+| 阶段/工作包 | 提交 | 内容 | 本地门禁记录 |
+| --- | --- | --- | --- |
+| 阶段 0 | 478cf74/50b368c | 快照、失败证据清单 docs/quality-recovery-phase0.md、PR #1 | — |
+| A | bc1b864 | ModelStatus 契约、事务修复、目录级锁、FsOps 注入；model_manager.rs 替代 models_dl.rs | 18 项模型测试通过（含注入失败/同尺寸损坏/并发/旧模型回退） |
+| B | 52d6502 | UiAction/UiResult 控制层、录音目标窗口规则、热键/自启事务、event.code→VK 映射 | 8 项事务/校验测试通过 |
+| C | b48fa97 | DPI 自适应 + WM_SIZE 同步、更新/公告结果持久可见、原生备用界面六类功能 | 构建/clippy 通过 |
+| D | 91a3968 | ci.yml、ui-tests（15 项 DOM 测试）、gui_smoke.ps1 | DOM 15/15；ps1 语法校验通过；DOM 测试发现并修复 settings.html 真实语法错误 |
+| E | d1ef440 | package.ps1/installer.iss/release.yml 唯一目录契约；0.8.0 版本与公告 | verify_release --tag v0.8.0 通过；远端无同名 tag |
+
+全量本地门禁（cargo fmt --check、clippy -D clippy::all、cargo test --workspace --locked 32 项、Python 3 项、npm ci + DOM 15 项、embedded-models 测试 26 项）全部通过。
+
+真机（本开发机，Windows 10.0.26100）：
+- embedded release 构建 + 隔离空目录 `--self-check`：退出码 0（真实 ASR/VAD 初始化成功）。
+- 同尺寸损坏 joiner 后再次 `--self-check`：检测→事务修复→退出码 0（哈希恢复）。
+
+### 未闭环（按完成定义不通过，禁止据此发布）
+
+1. §9 第 7–8 步完整打包与六资产验证：本机未装 Inno Setup，待 CI（choco 安装）执行；`--dist` 六资产与含空格路径打包测试未在本地完成。
+2. §9 第 9 步 GUI 冒烟（scripts/gui_smoke.ps1）需可交互桌面与 CI 产物；脚本已入库但未运行。
+3. §8.2 双窗口注入/退格、三模式、DPI 缩放矩阵、无 WebView2 备用界面真机验收：需真机执行。
+4. §8.3 发版后项（线上 Release、真机双形态热更新）：依赖发版，尚未发生。
+5. D3 更新网络适配器未抽取（registry/fs 已可注入）；updater.rs 的 HTTP 仍为直接调用。
+6. LNK4098 结论已记录于 ci.yml（sherpa-onnx /MT 与 Rust /MD 组合），消除需重编 sherpa-onnx，不在本轮范围。
+
+### 结论
+
+v0.8.0 **No-Go**：代码工作包 A–E 已落地且本地门禁全绿；待 PR CI 绿、完整打包六资产验证、GUI 冒烟与 §8.2/§8.3 真机验收对最终 main SHA 签收后，方可进入 §10 打 tag 流程。tag 未创建、未推送。
