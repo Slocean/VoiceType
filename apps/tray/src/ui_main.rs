@@ -22,34 +22,21 @@ pub fn toggle_recording(main_hwnd: HWND) {
             set_window_text(app.overlay_text, "正在结束录音并生成定稿…");
             return;
         }
-        // 模型随 exe 内置，正常情况下首次启动已解压；走到这里说明磁盘不可写等异常。
-        if !models_dl::models_ready() {
-            let recovery = models_dl::ensure_models_extracted();
-            if let Err(ref e) = recovery {
-                diagnostics::record("ERROR", "models", e);
-                settings_web::set_model_error(e);
+        // 录音前校验模型：主线程只做存在性/长度检查（不散列、不写模型），
+        // 检查失败时 manager 会在后台修复，界面随状态刷新。
+        let Some(manager) = model_manager::global() else { return };
+        let (model_dir, _kind) = match manager.ensure_ready_for_record() {
+            Ok(result) => result,
+            Err(message) => {
+                diagnostics::record("WARN", "models", &message);
+                set_window_text(app.overlay_text, &format!("⚠ {message}"));
+                unsafe {
+                    let _ = ShowWindow(app.overlay, SW_SHOW);
+                }
+                return;
             }
-        }
-        if !models_dl::models_ready() {
-            unsafe {
-                let text = wide(
-                    "语音模型未就绪（内置模型解压可能失败，请检查磁盘空间或安装目录权限）。
-
-排除后重启应用即可。",
-                );
-                let title = wide("VoiceType 模型异常");
-                let _ = MessageBoxW(
-                    Some(main_hwnd),
-                    PCWSTR(text.as_ptr()),
-                    PCWSTR(title.as_ptr()),
-                    MB_ICONWARNING,
-                );
-            }
-            return;
-        }
-        // 启动新的识别会话。
-        let model_dir = resolve_model_dir();
-        let Some(asr_cfg) = find_model_files(&model_dir) else {
+        };
+        let Some(asr_paths) = manager.scan_asr_files(&model_dir) else {
             set_window_text(
                 app.overlay_text,
                 &format!("ASR 模型缺失: {}", model_dir.display()),
@@ -59,7 +46,9 @@ pub fn toggle_recording(main_hwnd: HWND) {
             }
             return;
         };
-        let Some(vad_model) = find_vad_model(&model_dir) else {
+        let Some(vad_model) =
+            manager.find_vad_model(&model_dir, model_dir.parent().unwrap_or(Path::new(".")))
+        else {
             set_window_text(
                 app.overlay_text,
                 &format!("VAD 模型缺失: {}", model_dir.display()),
@@ -72,7 +61,7 @@ pub fn toggle_recording(main_hwnd: HWND) {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         match start_worker(
             NotifyHwnd(main_hwnd),
-            asr_cfg,
+            super::engine_config(asr_paths),
             vad_model,
             cmd_rx,
         ) {
@@ -632,14 +621,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         // 悬浮条常驻：就绪态常显，录音时显示识别文本。
         set_window_text(overlay_text, &format!("🎤 就绪 — 按 {} 开始说话", hotkey_name));
         let _ = ShowWindow(overlay, SW_SHOW);
-        // 首次使用（模型未就绪）时直接打开主界面引导下载，同时冒泡提示托盘位置。
-        if !models_dl::models_ready() {
-            settings_web::show_settings(hwnd);
-            show_tray_balloon(
-                hwnd,
-                "VoiceType 已在后台运行",
-                "主界面已打开：内置模型未就绪，请检查磁盘空间或安装目录权限。",
-            );
+        // 后台修复结果要能刷新界面：把主窗口句柄交给模型管理器。
+        if let Some(manager) = model_manager::global() {
+            manager.set_notify_hwnd(hwnd.0 as isize);
+            // 首次使用（快速检查模型未就绪）时打开主界面引导，同时冒泡提示托盘位置。
+            if !manager.quick_ready() {
+                settings_web::show_settings(hwnd);
+                show_tray_balloon(
+                    hwnd,
+                    "VoiceType 已在后台运行",
+                    "主界面已打开：内置模型未就绪，正在后台修复，请查看模型状态。",
+                );
+            }
         }
 
         let mut msg = MSG::default();

@@ -1,5 +1,6 @@
 //! WebView2 设置窗口。界面由内嵌 HTML/CSS 绘制，Rust 保留托盘和录音状态。
 
+use super::model_manager::{self, ModelStatus};
 use super::*;
 use raw_window_handle::{HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle};
 use std::cell::RefCell;
@@ -36,8 +37,22 @@ pub fn refresh_all() {
     let (mode, recording, vk, mods) = with_app(|app| {
         (app.mode, app.recording, app.hotkey_vk, app.hotkey_mods)
     }).unwrap_or((InjectMode::Hybrid, false, 0x78, 0));
-    let model_ready = models_dl::models_ready();
-    let root = models_dl::models_root();
+    let model = model_manager::global().map(|m| m.status());
+    let (model_ready, model_status, model_path) = match &model {
+        Some(status) => {
+            let dir = match status {
+                ModelStatus::Ready { dir, .. } => dir.display().to_string(),
+                ModelStatus::Corrupt { dir, .. } | ModelStatus::Repairing { dir } => {
+                    dir.display().to_string()
+                }
+                ModelStatus::Missing { dir, .. }
+                | ModelStatus::PermissionDenied { dir, .. } => dir.display().to_string(),
+                _ => String::new(),
+            };
+            (status.is_ready(), status.summary(), dir)
+        }
+        None => (false, "模型模块未初始化".into(), String::new()),
+    };
     let state = serde_json::json!({
         "version": updater::APP_VERSION,
         "mode": match mode { InjectMode::Paste => "paste", InjectMode::Type => "type", InjectMode::Hybrid => "hybrid" },
@@ -47,7 +62,8 @@ pub fn refresh_all() {
         "hotkeyMods": mods,
         "autostart": settings::autostart_enabled(),
         "modelReady": model_ready,
-        "modelPath": root.display().to_string(),
+        "modelStatus": model_status,
+        "modelPath": model_path,
     });
     send_js(&format!("window.voiceType && window.voiceType.state({state});"));
 }
@@ -106,17 +122,18 @@ fn on_ipc(body: &str) {
             if !hwnd.is_invalid() { updater::spawn_fetch_announcement(hwnd.0 as isize); }
         }
         "repairModels" => {
-            match models_dl::ensure_models_extracted() {
-                Ok(_) if models_dl::models_ready() => reply("模型已就绪", true),
-                Ok(_) => reply("模型文件仍不完整，请检查模型目录", false),
-                Err(e) => {
-                    diagnostics::record("ERROR", "models", &e);
-                    reply(&e, false);
+            match model_manager::global() {
+                Some(manager) => {
+                    // 后台执行：主线程不做散列与写模型；完成后经
+                    // WM_SETTINGS_READY 刷新，模型区保留最终状态。
+                    manager.start_check_and_repair();
+                    reply("模型检查与修复已在后台开始", true);
                 }
+                None => reply("模型模块未初始化", false),
             }
             refresh_all();
         }
-        _ => {}
+        _ => reply("不支持的操作", false)
     }
 }
 
@@ -210,8 +227,3 @@ pub fn fill_announcement(text: &str) -> bool {
 }
 
 pub fn refresh_update_status() { refresh_all(); }
-
-pub fn set_model_error(message: &str) {
-    let payload = serde_json::to_string(message).unwrap_or_else(|_| "\"模型不可用\"".into());
-    send_js(&format!("window.voiceType && window.voiceType.modelError({payload});"));
-}

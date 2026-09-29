@@ -143,20 +143,19 @@
         $('version').textContent = 'v' + next.version;
         const ok = next.modelReady;
         $('status-dot').classList.toggle('bad', !ok);
-        $('status-title').textContent = !ok ? '语音模型未就绪' : next.recording ? '正在录音' : '准备就绪';
-        $('status-sub').textContent = !ok ? '请查看偏好设置中的模型路径' : next.recording ? '再次点击或按快捷键结束' : '按 ' + next.hotkey + '，或点击右侧按钮开始';
+        $('status-title').textContent = !ok ? (next.modelStatus || '语音模型未就绪') : next.recording ? '正在录音' : '准备就绪';
+        $('status-sub').textContent = !ok ? '可在下方「重新检查」触发后台修复' : next.recording ? '再次点击或按快捷键结束' : '按 ' + next.hotkey + '，或返回目标应用后按快捷键开始';
         $('record-btn').textContent = next.recording ? '结束录音' : '开始录音';
         $('record-btn').disabled = !ok;
-        $('model-desc').textContent = ok ? '内置模型已就绪，可离线识别' : '内置模型不可用，请检查磁盘空间与目录权限';
+        $('model-desc').textContent = next.modelStatus || (ok ? '内置模型已就绪，可离线识别' : '内置模型不可用');
         $('model-badge').textContent = ok ? '已就绪' : '异常';
-        $('model-path').textContent = next.modelPath;
+        $('model-path').textContent = next.modelPath || '';
         $('autostart').classList.toggle('on', next.autostart);
         $('autostart').setAttribute('aria-checked', String(next.autostart));
         document.querySelectorAll('[data-mode]').forEach(el => el.classList.toggle('active', el.dataset.mode === next.mode));
         if (!pendingKey && document.activeElement !== $('hotkey')) $('hotkey').value = next.hotkey;
       },
       announcement(text) { $('announcement').textContent = text; },
-      modelError(text) { $('model-desc').textContent = text; window.voiceType.notice(text, false); },
       notice(text, ok) {
         const node = $('notice'); node.textContent = text; node.classList.toggle('error', !ok); node.classList.add('show');
         clearTimeout(noticeTimer); noticeTimer = setTimeout(() => node.classList.remove('show'), 4400);
