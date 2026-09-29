@@ -12,6 +12,9 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 空白检查需要解析 base..HEAD 区间，须取完整历史。
+          fetch-depth: 0
 
       - name: 安装固定 Rust 工具链（含 rustfmt / clippy）
         uses: dtolnay/rust-toolchain@stable
