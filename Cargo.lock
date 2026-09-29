@@ -2428,7 +2428,7 @@ dependencies = [
 
 [[package]]
 name = "voicetype-tray"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "bzip2-rs",
  "raw-window-handle",

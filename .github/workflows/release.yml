@@ -51,48 +51,55 @@ jobs:
           cargo build --release -p voicetype-tray --features embedded-models
 
       # 便携版 zip + 裸 exe + 安装版，全部自带模型，产物带 .sha256 清单。
+      # E：打包到唯一空目录（与安装包同目录），禁止复用旧 dist 文件。
       - name: 打包
         shell: pwsh
-        run: ./scripts/package.ps1 -SkipBuild
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP ("release-" + [Guid]::NewGuid().ToString("N"))
+          if (Test-Path $dir) { throw "候选目录不是空目录" }
+          ./scripts/package.ps1 -OutDir $dir -SkipBuild
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "PKG_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: 验证最终资产与内置模型
         shell: pwsh
         run: |
           if ($env:GITHUB_REF_TYPE -eq 'tag') {
-            python scripts/verify_release.py --tag "$env:GITHUB_REF_NAME" --dist dist
+            python scripts/verify_release.py --tag "$env:GITHUB_REF_NAME" --dist "$env:PKG_DIR"
           } else {
-            python scripts/verify_release.py --dist dist
+            python scripts/verify_release.py --dist "$env:PKG_DIR"
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:VOICETYPE_MODEL_DIR = Join-Path $env:RUNNER_TEMP 'voicetype-smoke-models'
-          $check = Start-Process -FilePath (Resolve-Path './dist/voicetype-tray.exe').Path -ArgumentList '--self-check' -Wait -PassThru -WindowStyle Hidden
+          $check = Start-Process -FilePath (Join-Path $env:PKG_DIR 'voicetype-tray.exe') -ArgumentList '--self-check' -Wait -PassThru -WindowStyle Hidden
+          Remove-Item -LiteralPath $env:VOICETYPE_MODEL_DIR -Recurse -Force -ErrorAction SilentlyContinue
           if ($check.ExitCode -ne 0) { throw "最终便携 exe 的模型解压或识别引擎初始化失败（退出码 $($check.ExitCode)）" }
 
       # 从 app_update.json 提取当前 tag 的更新公告作为 Release 正文。
       - name: 生成更新公告
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
-        run: python scripts/release_notes.py "$env:GITHUB_REF_NAME" dist/release_body.md
+        run: python scripts/release_notes.py "$env:GITHUB_REF_NAME" (Join-Path $env:PKG_DIR 'release_body.md')
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
           name: voicetype-win-x64
           path: |
-            dist/voicetype-win-x64-portable.zip
-            dist/voicetype-setup-x64.exe
-            dist/voicetype-tray.exe
-            dist/*.sha256
+            ${{ env.PKG_DIR }}/voicetype-win-x64-portable.zip
+            ${{ env.PKG_DIR }}/voicetype-setup-x64.exe
+            ${{ env.PKG_DIR }}/voicetype-tray.exe
+            ${{ env.PKG_DIR }}/*.sha256
 
       - name: 创建 GitHub Release（仅 tag 推送）
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          body_path: dist/release_body.md
+          body_path: ${{ env.PKG_DIR }}/release_body.md
           files: |
-            dist/voicetype-win-x64-portable.zip
-            dist/voicetype-win-x64-portable.zip.sha256
-            dist/voicetype-setup-x64.exe
-            dist/voicetype-setup-x64.exe.sha256
-            dist/voicetype-tray.exe
-            dist/voicetype-tray.exe.sha256
+            ${{ env.PKG_DIR }}/voicetype-win-x64-portable.zip
+            ${{ env.PKG_DIR }}/voicetype-win-x64-portable.zip.sha256
+            ${{ env.PKG_DIR }}/voicetype-setup-x64.exe
+            ${{ env.PKG_DIR }}/voicetype-setup-x64.exe.sha256
+            ${{ env.PKG_DIR }}/voicetype-tray.exe
+            ${{ env.PKG_DIR }}/voicetype-tray.exe.sha256
