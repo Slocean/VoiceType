@@ -35,12 +35,13 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 mod worker;
 use worker::start_worker;
 
-mod ui_main;
-mod updater;
+mod control;
+mod diagnostics;
 mod model_manager;
 mod settings;
 mod settings_web;
-mod diagnostics;
+mod ui_main;
+mod updater;
 
 // ---------- 入口 ----------
 
@@ -149,7 +150,6 @@ const OVERLAY_H: i32 = 72;
 /// STATIC 控件样式：居中 + 垂直居中。
 const SS_CENTER_TEXT: u32 = 0x1 | 0x200;
 
-/// 与内置模型解压和就绪检查共用模型路径；兼容环境变量直接指向识别模型目录。
 // 模型目录解析已统一收敛到 model_manager（显式目录/默认目录优先级、清单校验、
 // 事务修复），调用方不再自行拼装文件存在性检查。
 
@@ -183,7 +183,7 @@ impl NotifyHwnd {
 
 // ---------- 应用状态（仅主线程访问） ----------
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum InjectMode {
     Paste,
     Type,
@@ -209,6 +209,14 @@ struct App {
     hotkey_mods: u32,
     /// 热键组合的显示文本（如 "Ctrl + F9"），托盘提示与悬浮条文案用。
     hotkey_name: String,
+    /// 设置存储（注册表实现；测试通过控制层注入）。
+    store: std::sync::Arc<dyn settings::SettingsStore>,
+    /// 录音开始时捕获的外部前台目标窗口（None=无可靠目标，定稿不注入）。
+    record_target: Option<isize>,
+    /// 混合模式目标失效后暂停实时上屏（恢复目标后自动继续）。
+    interim_paused: bool,
+    /// 进行中的异步 UI 动作：seq → 动作键；完成时取走并交付最终结果。
+    pending: std::collections::HashMap<u64, String>,
 }
 
 thread_local! {

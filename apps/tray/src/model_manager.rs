@@ -51,8 +51,10 @@ const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[cfg(feature = "embedded-models")]
 mod embedded {
-    pub const ENCODER: &[u8] = include_bytes!("../embedded-models/encoder-epoch-99-avg-1.int8.onnx");
-    pub const DECODER: &[u8] = include_bytes!("../embedded-models/decoder-epoch-99-avg-1.int8.onnx");
+    pub const ENCODER: &[u8] =
+        include_bytes!("../embedded-models/encoder-epoch-99-avg-1.int8.onnx");
+    pub const DECODER: &[u8] =
+        include_bytes!("../embedded-models/decoder-epoch-99-avg-1.int8.onnx");
     pub const JOINER: &[u8] = include_bytes!("../embedded-models/joiner-epoch-99-avg-1.int8.onnx");
     pub const TOKENS: &[u8] = include_bytes!("../embedded-models/tokens.txt");
     pub const VAD: &[u8] = include_bytes!("../embedded-models/silero_vad.onnx");
@@ -75,10 +77,17 @@ pub struct FsError {
 
 impl FsError {
     pub fn other(message: impl Into<String>) -> Self {
-        Self { kind: FsErrorKind::Other, message: message.into() }
+        Self {
+            kind: FsErrorKind::Other,
+            message: message.into(),
+        }
     }
+    #[allow(dead_code)] // 生产路径由 from_io 构造；测试注入用
     pub fn access(message: impl Into<String>) -> Self {
-        Self { kind: FsErrorKind::Access, message: message.into() }
+        Self {
+            kind: FsErrorKind::Access,
+            message: message.into(),
+        }
     }
     fn from_io(prefix: &str, e: &std::io::Error) -> Self {
         let kind = if e.kind() == std::io::ErrorKind::PermissionDenied {
@@ -86,7 +95,10 @@ impl FsError {
         } else {
             FsErrorKind::Other
         };
-        Self { kind, message: format!("{prefix}: {e}") }
+        Self {
+            kind,
+            message: format!("{prefix}: {e}"),
+        }
     }
 }
 
@@ -203,12 +215,29 @@ pub enum ModelKind {
 pub enum ModelStatus {
     Checking,
     /// dir 为实际使用的识别模型目录。
-    Ready { dir: PathBuf, kind: ModelKind },
-    Missing { dir: PathBuf, missing: Vec<String> },
-    Corrupt { dir: PathBuf, file: PathBuf, reason: String },
-    PermissionDenied { dir: PathBuf, detail: String },
-    Repairing { dir: PathBuf },
-    Unavailable { message: String },
+    Ready {
+        dir: PathBuf,
+        kind: ModelKind,
+    },
+    Missing {
+        dir: PathBuf,
+        missing: Vec<String>,
+    },
+    Corrupt {
+        dir: PathBuf,
+        file: PathBuf,
+        reason: String,
+    },
+    PermissionDenied {
+        dir: PathBuf,
+        detail: String,
+    },
+    Repairing {
+        dir: PathBuf,
+    },
+    Unavailable {
+        message: String,
+    },
 }
 
 impl ModelStatus {
@@ -321,7 +350,9 @@ impl ModelManager {
             .filter(|v| !v.is_empty())
             .map(PathBuf::from);
         let defaults = [
-            std::env::current_exe().ok().and_then(|exe| exe.parent().map(|d| d.join("models"))),
+            std::env::current_exe()
+                .ok()
+                .and_then(|exe| exe.parent().map(|d| d.join("models"))),
             std::env::var("LOCALAPPDATA")
                 .ok()
                 .map(|base| PathBuf::from(base).join("VoiceType").join("models")),
@@ -352,15 +383,31 @@ impl ModelManager {
                 subdir: MODEL_SUBDIR,
                 bytes: Some(Cow::Borrowed(embedded::TOKENS)),
             },
-            FileSpec { name: VAD_FILE_NAME, subdir: "", bytes: Some(Cow::Borrowed(embedded::VAD)) },
+            FileSpec {
+                name: VAD_FILE_NAME,
+                subdir: "",
+                bytes: Some(Cow::Borrowed(embedded::VAD)),
+            },
         ];
         #[cfg(not(feature = "embedded-models"))]
         let specs = CURRENT_FILE_NAMES
             .into_iter()
-            .map(|name| FileSpec { name, subdir: MODEL_SUBDIR, bytes: None })
-            .chain(std::iter::once(FileSpec { name: VAD_FILE_NAME, subdir: "", bytes: None }))
+            .map(|name| FileSpec {
+                name,
+                subdir: MODEL_SUBDIR,
+                bytes: None,
+            })
+            .chain(std::iter::once(FileSpec {
+                name: VAD_FILE_NAME,
+                subdir: "",
+                bytes: None,
+            }))
             .collect();
-        Self { explicit, defaults, ..Self::with_fs(Box::new(RealFs), specs) }
+        Self {
+            explicit,
+            defaults,
+            ..Self::with_fs(Box::new(RealFs), specs)
+        }
     }
 
     pub fn set_notify_hwnd(&self, hwnd: isize) {
@@ -371,7 +418,14 @@ impl ModelManager {
         self.status
             .lock()
             .map(|s| s.clone())
-            .unwrap_or(ModelStatus::Unavailable { message: "模型状态锁损坏".into() })
+            .unwrap_or(ModelStatus::Unavailable {
+                message: "模型状态锁损坏".into(),
+            })
+    }
+
+    /// 是否有后台检查/修复在进行（UI 重复提交防护与完成判定用）。
+    pub fn is_busy(&self) -> bool {
+        self.busy.load(Ordering::SeqCst)
     }
 
     fn set_status(&self, status: ModelStatus) {
@@ -505,7 +559,10 @@ impl ModelManager {
             }
         }
         if !missing.is_empty() {
-            return Err(ModelStatus::Missing { dir: asr_dir, missing });
+            return Err(ModelStatus::Missing {
+                dir: asr_dir,
+                missing,
+            });
         }
         if !self.fs.is_file(&root.join(VAD_FILE_NAME))
             && !self.fs.is_file(&asr_dir.join(VAD_FILE_NAME))
@@ -546,11 +603,17 @@ impl ModelManager {
         let expected = spec.expected_hash().unwrap_or_else(|| sha256_hex(bytes));
         self.fs
             .create_dir_all(path.parent().unwrap_or(Path::new(".")))
-            .map_err(|e| FsError { kind: e.kind, message: format!("create: {}", e.message) })?;
+            .map_err(|e| FsError {
+                kind: e.kind,
+                message: format!("create: {}", e.message),
+            })?;
 
         let tmp = Self::unique_sibling(path, TMP_SUFFIX);
         let step = |label: &str, r: Result<(), FsError>| {
-            r.map_err(|e| FsError { kind: e.kind, message: format!("{label}: {}", e.message) })
+            r.map_err(|e| FsError {
+                kind: e.kind,
+                message: format!("{label}: {}", e.message),
+            })
         };
         step("create", self.fs.create_new(&tmp))?;
         if let Err(e) =
@@ -618,11 +681,10 @@ impl ModelManager {
         let wait = self.lock_wait.lock().map(|g| *g).unwrap_or(LOCK_WAIT);
         let deadline = std::time::Instant::now() + wait;
         loop {
-            match self.fs.create_new(&lock) {
-                Ok(()) => return Ok(true),
-                // 已存在（含他人持锁、权限异常等）：等待后复核，不强行抢删。
-                Err(_) => {}
+            if self.fs.create_new(&lock).is_ok() {
+                return Ok(true);
             }
+            // 已存在（含他人持锁、权限异常等）：等待后复核，不强行抢删。
             if std::time::Instant::now() >= deadline {
                 return Ok(false);
             }
@@ -659,7 +721,10 @@ impl ModelManager {
             if let Err(e) = self.repair_file(&path, spec) {
                 let dir = root.join(spec.subdir);
                 return Err(match e.kind {
-                    FsErrorKind::Access => ModelStatus::PermissionDenied { dir, detail: e.message },
+                    FsErrorKind::Access => ModelStatus::PermissionDenied {
+                        dir,
+                        detail: e.message,
+                    },
                     _ => ModelStatus::Unavailable { message: e.message },
                 });
             }
@@ -676,7 +741,9 @@ impl ModelManager {
             };
         }
         // 修复进行中：界面展示 Repairing 而不是旧的检查结果。
-        self.set_status(ModelStatus::Repairing { dir: root.to_path_buf() });
+        self.set_status(ModelStatus::Repairing {
+            dir: root.to_path_buf(),
+        });
         self.notify_ui();
         let locked = match self.acquire_repair_lock(root) {
             Ok(locked) => locked,
@@ -689,13 +756,21 @@ impl ModelManager {
         };
         if !locked {
             // 等待超时：复核现有结果，不重复动手。
-            return self.check_current(root, InspectLevel::Full)
-                .map(|dir| ModelStatus::Ready { dir, kind: ModelKind::Current })
+            return self
+                .check_current(root, InspectLevel::Full)
+                .map(|dir| ModelStatus::Ready {
+                    dir,
+                    kind: ModelKind::Current,
+                })
                 .unwrap_or_else(|status| status);
-        }        let status = match self.repair_current_at(root) {
+        }
+        let status = match self.repair_current_at(root) {
             Ok(()) => self
                 .check_current(root, InspectLevel::Full)
-                .map(|dir| ModelStatus::Ready { dir, kind: ModelKind::Current })
+                .map(|dir| ModelStatus::Ready {
+                    dir,
+                    kind: ModelKind::Current,
+                })
                 .unwrap_or_else(|status| status),
             Err(status) => status,
         };
@@ -718,7 +793,10 @@ impl ModelManager {
         if let Some(root) = self.explicit.clone() {
             if let Ok(dir) = self.check_current(&root, InspectLevel::Full) {
                 let _ = self.preferred_root.lock().map(|mut g| *g = Some(root));
-                return ModelStatus::Ready { dir, kind: ModelKind::Current };
+                return ModelStatus::Ready {
+                    dir,
+                    kind: ModelKind::Current,
+                };
             }
             let status = self.repair_at_root(&root);
             let _ = self.preferred_root.lock().map(|mut g| *g = Some(root));
@@ -738,12 +816,21 @@ impl ModelManager {
         let mut first_error: Option<ModelStatus> = None;
         for root in &roots {
             if let Ok(dir) = self.check_current(root, InspectLevel::Full) {
-                let _ = self.preferred_root.lock().map(|mut g| *g = Some(root.clone()));
-                return ModelStatus::Ready { dir, kind: ModelKind::Current };
+                let _ = self
+                    .preferred_root
+                    .lock()
+                    .map(|mut g| *g = Some(root.clone()));
+                return ModelStatus::Ready {
+                    dir,
+                    kind: ModelKind::Current,
+                };
             }
             let status = self.repair_at_root(root);
             if status.is_ready() {
-                let _ = self.preferred_root.lock().map(|mut g| *g = Some(root.clone()));
+                let _ = self
+                    .preferred_root
+                    .lock()
+                    .map(|mut g| *g = Some(root.clone()));
                 return status;
             }
             // 权限问题换下一级目录；其余失败已是根因，不必再试。
@@ -757,17 +844,25 @@ impl ModelManager {
         }
         for root in &roots {
             if let Some(legacy) = self.legacy_ready(root) {
-                let _ = self.preferred_root.lock().map(|mut g| *g = Some(root.clone()));
-                return ModelStatus::Ready { dir: legacy, kind: ModelKind::Legacy };
+                let _ = self
+                    .preferred_root
+                    .lock()
+                    .map(|mut g| *g = Some(root.clone()));
+                return ModelStatus::Ready {
+                    dir: legacy,
+                    kind: ModelKind::Legacy,
+                };
             }
         }
-        first_error.unwrap_or(ModelStatus::Unavailable { message: "没有可用的模型目录".into() })
+        first_error.unwrap_or(ModelStatus::Unavailable {
+            message: "没有可用的模型目录".into(),
+        })
     }
 
     // ---------- 后台入口 ----------
 
     /// 启动/手动触发的后台"检查并修复"。进行中重复调用直接忽略。
-    pub fn start_check_and_repair(self: &'static Self) {
+    pub fn start_check_and_repair(&'static self) {
         if self
             .busy
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -814,7 +909,10 @@ impl ModelManager {
     pub fn ensure_ready_for_record(&self) -> Result<(PathBuf, ModelKind), String> {
         let status = self.status();
         let ready = match &status {
-            ModelStatus::Ready { dir, kind: ModelKind::Current } => {
+            ModelStatus::Ready {
+                dir,
+                kind: ModelKind::Current,
+            } => {
                 let prepared = self.preferred_root.lock().ok().and_then(|g| g.clone());
                 let root = match prepared {
                     Some(path) => path,
@@ -825,7 +923,10 @@ impl ModelManager {
                 };
                 self.check_current(&root, InspectLevel::Quick).is_ok()
             }
-            ModelStatus::Ready { dir, kind: ModelKind::Legacy } => {
+            ModelStatus::Ready {
+                dir,
+                kind: ModelKind::Legacy,
+            } => {
                 self.scan_asr_files(dir).is_some()
                     && self
                         .find_vad_model(dir, dir.parent().unwrap_or(Path::new(".")))
@@ -906,10 +1007,19 @@ mod tests {
             self.0.denied.lock().unwrap().push(dir.to_path_buf());
         }
         fn denied_at(&self, path: &Path) -> bool {
-            self.0.denied.lock().unwrap().iter().any(|d| path.starts_with(d))
+            self.0
+                .denied
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|d| path.starts_with(d))
         }
         fn put(&self, path: &Path, bytes: &[u8]) {
-            self.0.files.lock().unwrap().insert(path.to_path_buf(), bytes.to_vec());
+            self.0
+                .files
+                .lock()
+                .unwrap()
+                .insert(path.to_path_buf(), bytes.to_vec());
         }
         fn get(&self, path: &Path) -> Option<Vec<u8>> {
             self.0.files.lock().unwrap().get(path).cloned()
@@ -954,14 +1064,20 @@ mod tests {
         fn create_dir_all(&self, path: &Path) -> Result<(), FsError> {
             self.check("create_dir")?;
             if self.denied_at(path) {
-                return Err(FsError::access(format!("create_dir: {} 拒绝访问", path.display())));
+                return Err(FsError::access(format!(
+                    "create_dir: {} 拒绝访问",
+                    path.display()
+                )));
             }
             self.0.dirs.lock().unwrap().insert(path.to_path_buf());
             Ok(())
         }
         fn create_new(&self, path: &Path) -> Result<(), FsError> {
             if self.denied_at(path) {
-                return Err(FsError::access(format!("create: {} 拒绝访问", path.display())));
+                return Err(FsError::access(format!(
+                    "create: {} 拒绝访问",
+                    path.display()
+                )));
             }
             if self.has(path) {
                 return Err(FsError::other("create: 已存在"));
@@ -972,9 +1088,16 @@ mod tests {
         fn write(&self, path: &Path, bytes: &[u8]) -> Result<(), FsError> {
             self.check("write")?;
             if self.denied_at(path) {
-                return Err(FsError::access(format!("write: {} 拒绝访问", path.display())));
+                return Err(FsError::access(format!(
+                    "write: {} 拒绝访问",
+                    path.display()
+                )));
             }
-            self.0.files.lock().unwrap().insert(path.to_path_buf(), bytes.to_vec());
+            self.0
+                .files
+                .lock()
+                .unwrap()
+                .insert(path.to_path_buf(), bytes.to_vec());
             Ok(())
         }
         fn sync(&self, path: &Path) -> Result<(), FsError> {
@@ -1002,7 +1125,10 @@ mod tests {
         fn remove(&self, path: &Path) -> Result<(), FsError> {
             self.check("cleanup")?;
             if self.denied_at(path) {
-                return Err(FsError::access(format!("remove: {} 拒绝访问", path.display())));
+                return Err(FsError::access(format!(
+                    "remove: {} 拒绝访问",
+                    path.display()
+                )));
             }
             self.0.files.lock().unwrap().remove(path);
             Ok(())
@@ -1121,26 +1247,31 @@ mod tests {
         m.defaults = vec![root.clone()];
         let asr = root.join(SUB);
         // 同尺寸损坏：长度相同、内容错误。
-        fs.write(&asr.join(CURRENT_FILE_NAMES[0]), b"ENCODER-byteZ").unwrap();
+        fs.write(&asr.join(CURRENT_FILE_NAMES[0]), b"ENCODER-byteZ")
+            .unwrap();
         assert!(matches!(
             m.check_current(&root, InspectLevel::Full),
             Err(ModelStatus::Corrupt { .. })
         ));
         let status = m.run_check_and_repair();
         assert!(status.is_ready(), "{status:?}");
-        assert_eq!(fs.get(&asr.join(CURRENT_FILE_NAMES[0])).unwrap(), b"encoder-bytes".to_vec());
+        assert_eq!(
+            fs.get(&asr.join(CURRENT_FILE_NAMES[0])).unwrap(),
+            b"encoder-bytes".to_vec()
+        );
     }
 
     #[test]
     fn quick_inspect_does_not_hash() {
         let fs = FakeFs::new();
         let specs = test_specs();
-        let mut m = manager_with(&fs, specs.clone());
+        let m = manager_with(&fs, specs.clone());
         let root = PathBuf::from("C:\\models");
         write_valid_model(&fs, &specs, &root);
         // 同尺寸损坏：Quick 检查发现不了（长度一致），Full 才能发现。
         let asr = root.join(SUB);
-        fs.write(&asr.join(CURRENT_FILE_NAMES[1]), b"DECODER-byteZ").unwrap();
+        fs.write(&asr.join(CURRENT_FILE_NAMES[1]), b"DECODER-byteZ")
+            .unwrap();
         assert!(m.check_current(&root, InspectLevel::Quick).is_ok());
         assert!(m.check_current(&root, InspectLevel::Full).is_err());
     }
@@ -1155,7 +1286,8 @@ mod tests {
         write_valid_model(&fs, &specs, &other); // 别处有完好模型，也不许偷偷改用
         write_valid_model(&fs, &specs, &explicit);
         let asr = explicit.join(SUB);
-        fs.write(&asr.join(CURRENT_FILE_NAMES[3]), b"TOKENS-byteZ").unwrap();
+        fs.write(&asr.join(CURRENT_FILE_NAMES[3]), b"TOKENS-byteZ")
+            .unwrap();
         m.explicit = Some(explicit.clone());
         // 检查：错误必须归属显式目录，不得回落到 C:\models。
         match m.check_current(&explicit, InspectLevel::Full) {
@@ -1177,7 +1309,11 @@ mod tests {
         m.defaults = vec![exe_side.clone(), user_side.clone()];
         // exe 侧存在但只读（损坏文件无法替换）：修复失败后换用户目录。
         fs.create_dir_all(&exe_side.join(SUB)).unwrap();
-        fs.write(&exe_side.join(SUB).join(CURRENT_FILE_NAMES[0]), b"CORRUPted").unwrap();
+        fs.write(
+            &exe_side.join(SUB).join(CURRENT_FILE_NAMES[0]),
+            b"CORRUPted",
+        )
+        .unwrap();
         fs.deny(&exe_side);
         let status = m.run_check_and_repair();
         assert!(status.is_ready(), "{status:?}");
@@ -1193,7 +1329,11 @@ mod tests {
         let user_side = PathBuf::from("C:\\Users\\u\\AppData\\Local\\VoiceType\\models");
         m.defaults = vec![user_side.clone()];
         fs.create_dir_all(&explicit.join(SUB)).unwrap();
-        fs.write(&explicit.join(SUB).join(CURRENT_FILE_NAMES[0]), b"CORRUPted").unwrap();
+        fs.write(
+            &explicit.join(SUB).join(CURRENT_FILE_NAMES[0]),
+            b"CORRUPted",
+        )
+        .unwrap();
         fs.deny(&explicit);
         m.explicit = Some(explicit.clone());
         let status = m.run_check_and_repair();
@@ -1255,7 +1395,8 @@ mod tests {
         write_valid_model(&fs, &test_specs(), &root);
         m.defaults = vec![root.clone()];
         // 先损坏一个文件触发修复，再让校验步骤失败。
-        fs.write(&root.join(SUB).join(CURRENT_FILE_NAMES[0]), b"CORRUPted").unwrap();
+        fs.write(&root.join(SUB).join(CURRENT_FILE_NAMES[0]), b"CORRUPted")
+            .unwrap();
         fs.fail_at("verify");
         let status = m.run_check_and_repair();
         assert!(!status.is_ready(), "{status:?}");
@@ -1285,8 +1426,16 @@ mod tests {
         assert!(status.is_ready(), "清理失败不影响就绪：{status:?}");
         // 残留备份不匹配模型扫描口径，扫描仍能定位模型文件。
         assert!(m.scan_asr_files(&root.join(SUB)).is_some());
-        let names = fs.0.files.lock().unwrap().keys().cloned().collect::<Vec<_>>();
-        assert!(names.iter().any(|n| n.to_string_lossy().ends_with(BAK_SUFFIX)));
+        let names =
+            fs.0.files
+                .lock()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>();
+        assert!(names
+            .iter()
+            .any(|n| n.to_string_lossy().ends_with(BAK_SUFFIX)));
     }
 
     #[test]
@@ -1348,31 +1497,50 @@ mod tests {
         .iter()
         .enumerate()
         {
-            fs.write(&legacy.join(name), format!("legacy-{i}").as_bytes()).unwrap();
+            fs.write(&legacy.join(name), format!("legacy-{i}").as_bytes())
+                .unwrap();
         }
-        fs.write(&legacy.join("tokens.txt"), b"legacy-tokens").unwrap();
+        fs.write(&legacy.join("tokens.txt"), b"legacy-tokens")
+            .unwrap();
         fs.write(&root.join(VAD_FILE_NAME), b"legacy-vad").unwrap();
         m.defaults = vec![root.clone()];
         // 内嵌规格存在但文件缺失：先修复当前模型，不得停在旧模型上。
         let status = m.run_check_and_repair();
         assert!(
-            matches!(status, ModelStatus::Ready { kind: ModelKind::Current, .. }),
+            matches!(
+                status,
+                ModelStatus::Ready {
+                    kind: ModelKind::Current,
+                    ..
+                }
+            ),
             "{status:?}"
         );
         // 无内嵌内容（开发构建口径）：当前缺失、旧模型齐全 → 回退旧模型。
         let fs2 = FakeFs::new();
         let dev_specs: Vec<FileSpec> = CURRENT_FILE_NAMES
             .into_iter()
-            .map(|n| FileSpec { name: n, subdir: SUB, bytes: None })
-            .chain(std::iter::once(FileSpec { name: VAD_FILE_NAME, subdir: "", bytes: None }))
+            .map(|n| FileSpec {
+                name: n,
+                subdir: SUB,
+                bytes: None,
+            })
+            .chain(std::iter::once(FileSpec {
+                name: VAD_FILE_NAME,
+                subdir: "",
+                bytes: None,
+            }))
             .collect();
         let mut m2 = manager_with(&fs2, dev_specs);
         let root2 = PathBuf::from("C:\\dev-models");
         let legacy2 = root2.join(LEGACY_MODEL_SUBDIR);
         fs2.create_dir_all(&legacy2).unwrap();
-        fs2.write(&legacy2.join("encoder-epoch-99-avg-1.onnx"), b"e").unwrap();
-        fs2.write(&legacy2.join("decoder-epoch-99-avg-1.onnx"), b"d").unwrap();
-        fs2.write(&legacy2.join("joiner-epoch-99-avg-1.onnx"), b"j").unwrap();
+        fs2.write(&legacy2.join("encoder-epoch-99-avg-1.onnx"), b"e")
+            .unwrap();
+        fs2.write(&legacy2.join("decoder-epoch-99-avg-1.onnx"), b"d")
+            .unwrap();
+        fs2.write(&legacy2.join("joiner-epoch-99-avg-1.onnx"), b"j")
+            .unwrap();
         fs2.write(&legacy2.join("tokens.txt"), b"t").unwrap();
         fs2.write(&root2.join(VAD_FILE_NAME), b"v").unwrap();
         m2.defaults = vec![root2.clone()];
@@ -1393,10 +1561,16 @@ mod tests {
         let asr = root.join(SUB);
         fs.create_dir_all(&asr).unwrap();
         // 伪装成 encoder 的临时文件与备份。
-        fs.write(&asr.join("encoder-epoch-99-avg-1.int8.onnx.123.456.voicetype-tmp"), b"tmp")
-            .unwrap();
-        fs.write(&asr.join("encoder-epoch-99-avg-1.int8.onnx.123.456.voicetype-bak"), b"bak")
-            .unwrap();
+        fs.write(
+            &asr.join("encoder-epoch-99-avg-1.int8.onnx.123.456.voicetype-tmp"),
+            b"tmp",
+        )
+        .unwrap();
+        fs.write(
+            &asr.join("encoder-epoch-99-avg-1.int8.onnx.123.456.voicetype-bak"),
+            b"bak",
+        )
+        .unwrap();
         let status = m.run_check_and_repair();
         assert!(status.is_ready(), "临时文件不得阻止修复：{status:?}");
         assert_eq!(ready_dir(&status), asr);
@@ -1406,12 +1580,18 @@ mod tests {
     fn status_summary_is_user_readable_for_each_state() {
         let dir = PathBuf::from("C:\\models\\sub");
         assert!(!ModelStatus::Checking.summary().is_empty());
-        assert!(ModelStatus::Ready { dir: dir.clone(), kind: ModelKind::Current }
-            .summary()
-            .contains("就绪"));
-        assert!(ModelStatus::Missing { dir: dir.clone(), missing: vec!["a.onnx".into()] }
-            .summary()
-            .contains("a.onnx"));
+        assert!(ModelStatus::Ready {
+            dir: dir.clone(),
+            kind: ModelKind::Current
+        }
+        .summary()
+        .contains("就绪"));
+        assert!(ModelStatus::Missing {
+            dir: dir.clone(),
+            missing: vec!["a.onnx".into()]
+        }
+        .summary()
+        .contains("a.onnx"));
         assert!(ModelStatus::Corrupt {
             dir: dir.clone(),
             file: dir.join("a.onnx"),
@@ -1419,9 +1599,16 @@ mod tests {
         }
         .summary()
         .contains("损坏"));
-        assert!(ModelStatus::PermissionDenied { dir: dir.clone(), detail: "Access".into() }
-            .summary()
-            .contains("不可写"));
-        assert!(!ModelStatus::Unavailable { message: "x".into() }.summary().is_empty());
+        assert!(ModelStatus::PermissionDenied {
+            dir: dir.clone(),
+            detail: "Access".into()
+        }
+        .summary()
+        .contains("不可写"));
+        assert!(!ModelStatus::Unavailable {
+            message: "x".into()
+        }
+        .summary()
+        .is_empty());
     }
 }

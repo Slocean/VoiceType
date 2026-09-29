@@ -66,7 +66,7 @@ fn keybd_event_alt() {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP,
     };
-    let mut events = [
+    let events = [
         INPUT {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
@@ -93,7 +93,10 @@ fn keybd_event_alt() {
         },
     ];
     unsafe {
-        SendInput(&mut events, std::mem::size_of::<windows::Win32::UI::Input::KeyboardAndMouse::INPUT>() as i32)
+        SendInput(
+            &events,
+            std::mem::size_of::<windows::Win32::UI::Input::KeyboardAndMouse::INPUT>() as i32,
+        )
     };
 }
 
@@ -126,10 +129,19 @@ fn main() {
     unsafe {
         let hwnd = create_edit_window();
         let foreground_ok = GetForegroundWindow() == hwnd;
-        println!("前台窗口获取: {}", if foreground_ok { "成功" } else { "失败（结果可能不可信）" });
+        println!(
+            "前台窗口获取: {}",
+            if foreground_ok {
+                "成功"
+            } else {
+                "失败（结果可能不可信）"
+            }
+        );
 
         // 策略一：Unicode 逐字键入
-        TypingInjector::default().inject(EXPECTED).expect("type 注入失败");
+        TypingInjector::default()
+            .inject(EXPECTED)
+            .expect("type 注入失败");
         pump_messages(Duration::from_millis(500));
         pass &= check("type  ", read_edit_text(hwnd));
         clear_edit(hwnd);
@@ -138,7 +150,9 @@ fn main() {
         let original_clipboard = arboard::Clipboard::new()
             .and_then(|mut cb| cb.get_text())
             .ok();
-        ClipboardInjector::default().inject(EXPECTED).expect("paste 注入失败");
+        ClipboardInjector::default()
+            .inject(EXPECTED)
+            .expect("paste 注入失败");
         pump_messages(Duration::from_millis(500));
         pass &= check("paste ", read_edit_text(hwnd));
         // 等待异步恢复完成后校验剪贴板内容。
@@ -165,7 +179,9 @@ fn main() {
             .expect("hybrid 中间结果1失败");
         pump_messages(Duration::from_millis(300));
         println!("[diag] hybrid 上屏第一段后: {:?}", read_edit_text(hwnd));
-        injector.update_interim(EXPECTED).expect("hybrid 中间结果2失败");
+        injector
+            .update_interim(EXPECTED)
+            .expect("hybrid 中间结果2失败");
         pump_messages(Duration::from_millis(300));
         println!("[diag] hybrid 上屏全量后: {:?}", read_edit_text(hwnd));
         injector.cancel().expect("hybrid 撤销失败");

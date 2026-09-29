@@ -141,9 +141,10 @@ fn create_engine(
         "mock" => Ok(Box::new(MockAsr::new(mock_text))),
         #[cfg(feature = "sherpa")]
         "sherpa" => {
-            let required = |name: &str, v: Option<PathBuf>| -> Result<PathBuf, Box<dyn std::error::Error>> {
-                v.ok_or_else(|| format!("engine=sherpa 需要 --{name} 指定模型文件").into())
-            };
+            let required =
+                |name: &str, v: Option<PathBuf>| -> Result<PathBuf, Box<dyn std::error::Error>> {
+                    v.ok_or_else(|| format!("engine=sherpa 需要 --{name} 指定模型文件").into())
+                };
             let config = voicetype_asr::SherpaAsrConfig {
                 encoder: required("encoder", encoder)?,
                 decoder: required("decoder", decoder)?,
@@ -165,10 +166,13 @@ fn feed_session<V: voicetype_asr::Vad, A: voicetype_asr::StreamingAsr>(
     pcm: &[f32],
 ) {
     let chunk = voicetype_audio::TARGET_SAMPLE_RATE as usize / 4; // 0.25s
-    // 文件没有"说话后的停顿"，补 1 秒静音模拟真实麦克风的尾静音，
-    // 否则 VAD 的静音尾判定永远不满足。
+                                                                  // 文件没有"说话后的停顿"，补 1 秒静音模拟真实麦克风的尾静音，
+                                                                  // 否则 VAD 的静音尾判定永远不满足。
     let mut stream = pcm.to_vec();
-    stream.extend(std::iter::repeat(0.0f32).take(voicetype_audio::TARGET_SAMPLE_RATE as usize));
+    stream.extend(std::iter::repeat_n(
+        0.0f32,
+        voicetype_audio::TARGET_SAMPLE_RATE as usize,
+    ));
     for part in stream.chunks(chunk) {
         for u in session.accept_samples(part).expect("会话处理失败") {
             match u {
@@ -273,7 +277,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let pcm = voicetype_audio::load_wav(&from_file)?;
             let stats = voicetype_audio::analyze(&pcm);
-            println!("已加载音频：{}（{:.1}s）", from_file.display(), stats.duration_secs);
+            println!(
+                "已加载音频：{}（{:.1}s）",
+                from_file.display(),
+                stats.duration_secs
+            );
 
             #[cfg(feature = "sherpa")]
             if let Some(vad_path) = vad_model {
@@ -297,7 +305,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
 
             // Mock 链路：2 秒（32000 采样）后断句，验证状态机骨架。
-            let mut session = VoiceSession::new(MockVad::new(32_000), MockAsr::new("（Mock 定稿文本）"));
+            let mut session =
+                VoiceSession::new(MockVad::new(32_000), MockAsr::new("（Mock 定稿文本）"));
             feed_session(&mut session, &pcm);
         }
         Command::Record { seconds, out } => {
@@ -338,13 +347,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             for part in pcm.chunks(chunk) {
                 asr.accept_samples(part)?;
                 if let Some(r) = asr.take_result()? {
-                    println!("识别中: {} {}", if r.is_final { "[定稿]" } else { "      " }, r.text);
+                    println!(
+                        "识别中: {} {}",
+                        if r.is_final { "[定稿]" } else { "      " },
+                        r.text
+                    );
                 }
             }
             asr.finish()?;
             let mut final_text = String::new();
             while let Some(r) = asr.take_result()? {
-                println!("识别中: {} {}", if r.is_final { "[定稿]" } else { "      " }, r.text);
+                println!(
+                    "识别中: {} {}",
+                    if r.is_final { "[定稿]" } else { "      " },
+                    r.text
+                );
                 if r.is_final {
                     final_text = r.text;
                 }

@@ -44,7 +44,10 @@ impl SherpaAsr {
             ("tokens", &config.tokens),
         ] {
             if !path.exists() {
-                return Err(AsrError::Init(format!("{name} 模型文件不存在: {}", path.display())));
+                return Err(AsrError::Init(format!(
+                    "{name} 模型文件不存在: {}",
+                    path.display()
+                )));
             }
         }
         let to_str = |p: &PathBuf| p.to_string_lossy().into_owned();
@@ -68,8 +71,9 @@ impl SherpaAsr {
             enable_endpoint: true,
             ..Default::default()
         };
-        let recognizer = sherpa_onnx::OnlineRecognizer::create(&cfg)
-            .ok_or_else(|| AsrError::Init("OnlineRecognizer::create 返回空（检查模型文件是否匹配）".into()))?;
+        let recognizer = sherpa_onnx::OnlineRecognizer::create(&cfg).ok_or_else(|| {
+            AsrError::Init("OnlineRecognizer::create 返回空（检查模型文件是否匹配）".into())
+        })?;
         let stream = recognizer.create_stream();
         Ok(Self {
             recognizer,
@@ -262,7 +266,10 @@ impl Vad for SherpaVad {
         // 段范围 = 首个疑似语音采样 → 静音尾起点（后缀静音不送识别）。
         if self.seen_speech && self.tail_is_silent() {
             self.emitted = true;
-            let end = self.history.len().saturating_sub(self.config.silence_samples);
+            let end = self
+                .history
+                .len()
+                .saturating_sub(self.config.silence_samples);
             let start = self.speech_start.unwrap_or(0).min(end);
             return Ok(Some(SpeechSpan {
                 start_sample: start,
