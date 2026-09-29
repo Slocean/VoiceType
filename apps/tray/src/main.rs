@@ -39,6 +39,7 @@ mod control;
 mod diagnostics;
 mod model_manager;
 mod settings;
+mod settings_native;
 mod settings_web;
 mod ui_main;
 mod updater;
@@ -217,6 +218,10 @@ struct App {
     interim_paused: bool,
     /// 进行中的异步 UI 动作：seq → 动作键；完成时取走并交付最终结果。
     pending: std::collections::HashMap<u64, String>,
+    /// 最近一次检查更新结果（ok, 文本）。持久展示，直到下一次请求替换。
+    last_check: Option<(bool, String)>,
+    /// 最近一次公告获取结果（ok, 文本）。持久展示，直到下一次请求替换。
+    last_announcement: Option<(bool, String)>,
 }
 
 thread_local! {

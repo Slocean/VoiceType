@@ -8,6 +8,7 @@ use raw_window_handle::{
 };
 use std::cell::RefCell;
 use std::num::NonZeroIsize;
+use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use wry::{dpi, PageLoadEvent, Rect as WebRect, WebContext, WebView, WebViewBuilder};
 
 const CLIENT_W: i32 = 760;
@@ -59,6 +60,9 @@ pub fn refresh_all() {
     let autostart = with_app(|app| app.store.autostart_enabled()).unwrap_or(false);
     let pending: Vec<String> =
         with_app(|app| app.pending.values().cloned().collect()).unwrap_or_default();
+    let (last_check, last_announcement) =
+        with_app(|app| (app.last_check.clone(), app.last_announcement.clone()))
+            .unwrap_or((None, None));
     let model = model_manager::global().map(|m| m.status());
     let (model_ready, model_status, model_path) = match &model {
         Some(status) => {
@@ -85,6 +89,9 @@ pub fn refresh_all() {
         "hotkeyMods": mods,
         "autostart": autostart,
         "pending": pending,
+        "lastCheck": last_check.map(|(ok, text)| serde_json::json!({ "ok": ok, "text": text })),
+        "lastAnnouncement": last_announcement
+            .map(|(ok, text)| serde_json::json!({ "ok": ok, "text": text })),
         "modelReady": model_ready,
         "modelStatus": model_status,
         "modelPath": model_path,
@@ -113,6 +120,7 @@ pub fn deliver_done(seq: u64, action: &str, ok: bool, message: &str) {
         "window.voiceType && window.voiceType.result({value});"
     ));
     refresh_all();
+    super::settings_native::refresh_fallback();
 }
 
 /// 隐藏设置窗口（首页"返回目标应用"动作）。
@@ -175,12 +183,14 @@ pub unsafe fn show_settings(_main_hwnd: HWND) {
         ..Default::default()
     };
     RegisterClassW(&wc);
-    let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_THICKFRAME;
+    // C2：客户区按当前 DPI 缩放，避免高缩放下内容被裁切；WM_SIZE 同步 WebView。
+    let scale = unsafe { GetDpiForSystem() } as f32 / 96.0;
     let mut rc = RECT {
         left: 0,
         top: 0,
-        right: CLIENT_W,
-        bottom: CLIENT_H,
+        right: (CLIENT_W as f32 * scale).round() as i32,
+        bottom: (CLIENT_H as f32 * scale).round() as i32,
     };
     let _ = AdjustWindowRect(&mut rc, style, false);
     let width = rc.right - rc.left;
@@ -214,8 +224,8 @@ pub unsafe fn show_settings(_main_hwnd: HWND) {
     let _ = std::fs::create_dir_all(&data_dir);
     let mut context = WebContext::new(Some(data_dir));
     let bounds = WebRect {
-        position: dpi::LogicalPosition::new(0, 0).into(),
-        size: dpi::LogicalSize::new(CLIENT_W, CLIENT_H).into(),
+        position: dpi::PhysicalPosition::new(0, 0).into(),
+        size: client_physical_size(hwnd).into(),
     };
     let host = HostWindow(hwnd);
     let view = WebViewBuilder::new_with_web_context(&mut context)
@@ -236,17 +246,11 @@ pub unsafe fn show_settings(_main_hwnd: HWND) {
             let _ = SetForegroundWindow(hwnd);
         }
         Err(e) => {
-            diagnostics::record("ERROR", "settings", &e.to_string());
-            let message = wide(&format!(
-                "现代界面启动失败：{e}\n\n请安装或修复 Microsoft Edge WebView2 Runtime。"
-            ));
-            let _ = MessageBoxW(
-                Some(hwnd),
-                PCWSTR(message.as_ptr()),
-                w!("VoiceType"),
-                MB_ICONWARNING,
-            );
+            // C2：WebView2 缺失或创建失败时，提供可操作的原生备用设置窗口，
+            // 调用同一控制层；诊断日志记录失败原因。
+            diagnostics::record("ERROR", "settings", &format!("WebView 创建失败：{e}"));
             let _ = DestroyWindow(hwnd);
+            super::settings_native::show_fallback(_main_hwnd);
         }
     }
 }
@@ -265,4 +269,25 @@ pub fn fill_announcement(text: &str) -> bool {
 
 pub fn refresh_update_status() {
     refresh_all();
+}
+
+/// C2：按主窗口实际客户区（物理像素）返回 WebView 尺寸。
+pub fn client_physical_size(hwnd: HWND) -> dpi::PhysicalSize<i32> {
+    unsafe {
+        let mut rc = RECT::default();
+        let _ = GetClientRect(hwnd, &mut rc);
+        dpi::PhysicalSize::new(rc.right - rc.left, rc.bottom - rc.top)
+    }
+}
+
+/// WM_SIZE：同步 WebView 子窗口边界（显示器切换/缩放变化后也会触发）。
+pub fn resize_webview(hwnd: HWND) {
+    WEBVIEW.with(|slot| {
+        if let Some(view) = slot.borrow().as_ref() {
+            let _ = view.set_bounds(WebRect {
+                position: dpi::PhysicalPosition::new(0, 0).into(),
+                size: client_physical_size(hwnd).into(),
+            });
+        }
+    });
 }

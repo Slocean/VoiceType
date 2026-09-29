@@ -84,6 +84,7 @@
           <div><div class="hero-title"><span id="status-dot" class="dot"></span><span id="status-title">正在检查模型…</span></div><p id="status-sub">请稍候</p></div>
           <button id="record-btn" class="primary" type="button">隐藏窗口，去目标应用</button>
         </div>
+        <p id="announce-hint" class="sub" hidden></p>
         <div class="section-title">输入方式</div>
         <div class="card"><div class="choice-grid">
           <button class="choice" data-mode="paste" type="button"><strong>粘贴</strong><span>识别结束后一次性输入</span></button>
@@ -101,6 +102,7 @@
       <section id="about" class="page">
         <div class="eyebrow">Updates &amp; about</div><h1>更新与关于</h1><p class="lede">查看当前版本、检查更新和阅读更新公告。</p>
         <div class="card"><div class="row"><div><div class="label">VoiceType <span id="version"></span></div><div class="sub">离线中文语音输入</div></div><button id="update-btn" class="secondary" type="button">检查更新</button></div></div>
+        <div class="card" style="margin-top:12px"><div class="label">最近一次检查结果</div><div class="sub" id="update-result">尚无检查结果。</div></div>
         <div class="section-title">更新公告</div>
         <div class="card"><div class="announcement" id="announcement">点击下方按钮获取最新公告。</div><div class="actions"><button id="announcement-btn" class="secondary" type="button">获取更新公告</button></div></div>
         <div class="section-title">项目</div>
@@ -208,6 +210,22 @@
         $('autostart').setAttribute('aria-checked', String(next.autostart));
         document.querySelectorAll('[data-mode]').forEach(el => el.classList.toggle('active', el.dataset.mode === next.mode));
         if (!pendingKey && document.activeElement !== $('hotkey')) $('hotkey').value = next.hotkey;
+        // C1：持久结果——关窗重开后仍可查看，直到下一次请求替换。
+        const lastCheck = next.lastCheck;
+        $('update-result').textContent = lastCheck
+          ? '检查更新（' + (lastCheck.ok ? '成功' : '失败') + '）：' + lastCheck.text
+          : '尚无检查结果。';
+        const lastAnn = next.lastAnnouncement;
+        if (lastAnn) {
+          $('announcement').textContent = lastAnn.text;
+          const hint = $('announce-hint');
+          hint.hidden = false;
+          hint.textContent = '📢 公告已更新（' + (lastAnn.ok ? '成功' : '失败') + '）：'
+            + lastAnn.text.split('
+')[0] + '（详见「更新与关于」页）';
+        } else {
+          $('announce-hint').hidden = true;
+        }
       },
       announcement(text) { $('announcement').textContent = text; },
       result(r) {

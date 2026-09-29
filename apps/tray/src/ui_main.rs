@@ -304,8 +304,10 @@ unsafe fn show_tray_balloon(hwnd: HWND, title: &str, text: &str) {
     };
     let t = wide(title);
     let b = wide(text);
-    data.szInfoTitle[..t.len() - 1].copy_from_slice(&t[..t.len() - 1]);
-    data.szInfo[..b.len() - 1].copy_from_slice(&b[..b.len() - 1]);
+    let tn = (t.len() - 1).min(data.szInfoTitle.len());
+    data.szInfoTitle[..tn].copy_from_slice(&t[..tn]);
+    let bn = (b.len() - 1).min(data.szInfo.len());
+    data.szInfo[..bn].copy_from_slice(&b[..bn]);
     let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
 }
 
@@ -441,8 +443,8 @@ fn set_overlay_idle(overlay_text: HWND, name: &str) {
     set_window_text(overlay_text, &format!("🎤 就绪 — 按 {name} 开始说话"));
 }
 
-/// 更新后台任务完成：按事件类别（检查更新/公告）分发；有界面待完成动作时
-/// 交付最终结果，新版就绪时保留用户确认与重启流程。
+/// 更新后台任务完成：按事件类别（检查更新/公告）分发；结果持久保存并在
+/// 界面展示；托盘触发且页面不可见时用气泡兜底；新版就绪时保留确认重启流程。
 fn handle_update_event(hwnd: HWND) {
     let Some(ev) = updater::take_update_event() else {
         return;
@@ -450,8 +452,10 @@ fn handle_update_event(hwnd: HWND) {
     if !ev.ok {
         diagnostics::record("ERROR", "updater", &ev.text);
     }
+    let first_line: String = ev.text.lines().next().unwrap_or_default().to_string();
     match ev.kind {
         updater::UpdateEventKind::Check => {
+            with_app(|app| app.last_check = Some((ev.ok, ev.text.clone())));
             settings_web::refresh_update_status();
             let seq = control::take_pending("checkUpdate");
             if let Some(seq) = seq {
@@ -487,53 +491,32 @@ fn handle_update_event(hwnd: HWND) {
                     }
                 }
             } else if seq.is_none() {
-                // 托盘触发（无界面动作编号）：弹窗给出结果。
+                // 托盘触发（无界面动作编号）：气泡兜底；持久结果在更新页可查。
+                let title = if ev.ok {
+                    "VoiceType 更新"
+                } else {
+                    "VoiceType 更新失败"
+                };
                 unsafe {
-                    let title = wide(if ev.ok {
-                        "VoiceType 更新"
-                    } else {
-                        "VoiceType 更新失败"
-                    });
-                    let text = wide(&ev.text);
-                    let flags = if ev.ok {
-                        MB_ICONINFORMATION
-                    } else {
-                        MB_ICONWARNING
-                    };
-                    let _ = MessageBoxW(
-                        Some(hwnd),
-                        PCWSTR(text.as_ptr()),
-                        PCWSTR(title.as_ptr()),
-                        flags,
-                    );
+                    show_tray_balloon(hwnd, title, &first_line);
                 }
             }
         }
         updater::UpdateEventKind::Announcement => {
+            with_app(|app| app.last_announcement = Some((ev.ok, ev.text.clone())));
             let delivered = settings_web::fill_announcement(&ev.text);
             if let Some(seq) = control::take_pending("announcement") {
                 settings_web::deliver_done(seq, "announcement", ev.ok, &ev.text);
             }
             if !delivered {
-                // 页面不可见：弹窗兜底，公告内容不丢。
+                // 页面不可见：气泡兜底；持久结果保存在「更新与关于」页。
+                let title = if ev.ok {
+                    "更新公告"
+                } else {
+                    "获取公告失败"
+                };
                 unsafe {
-                    let title = wide(if ev.ok {
-                        "更新公告"
-                    } else {
-                        "获取公告失败"
-                    });
-                    let text = wide(&ev.text);
-                    let flags = if ev.ok {
-                        MB_ICONINFORMATION
-                    } else {
-                        MB_ICONWARNING
-                    };
-                    let _ = MessageBoxW(
-                        Some(hwnd),
-                        PCWSTR(text.as_ptr()),
-                        PCWSTR(title.as_ptr()),
-                        flags,
-                    );
+                    show_tray_balloon(hwnd, title, &first_line);
                 }
             }
         }
@@ -565,6 +548,13 @@ pub(crate) unsafe extern "system" fn wndproc(
         }
         WM_SETTINGS_READY => {
             settings_web::refresh_all();
+            LRESULT(0)
+        }
+        WM_SIZE => {
+            // C2：设置窗口尺寸变化（含 DPI/显示器切换）时同步 WebView 子窗口。
+            if with_app(|app| app.settings == hwnd).unwrap_or(false) {
+                settings_web::resize_webview(hwnd);
+            }
             LRESULT(0)
         }
         WM_TRAY_CALLBACK => {
@@ -706,6 +696,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 record_target: None,
                 interim_paused: false,
                 pending: std::collections::HashMap::new(),
+                last_check: None,
+                last_announcement: None,
             });
         });
 

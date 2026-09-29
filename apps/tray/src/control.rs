@@ -117,6 +117,13 @@ pub fn dispatch(seq: u64, action: UiAction) {
     }
 }
 
+static NEXT_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1_000_000);
+
+/// 原生备用窗口发起动作时取动作编号（与 HTML 的编号空间隔离）。
+pub fn next_seq() -> u64 {
+    NEXT_SEQ.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+}
+
 fn mark_pending(seq: u64, key: &str) {
     with_app(|app| {
         app.pending.insert(seq, key.to_string());
