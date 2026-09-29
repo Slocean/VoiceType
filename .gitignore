@@ -9,3 +9,5 @@ dist/
 apps/tray/embedded-models/
 __pycache__/
 *.pyc
+node_modules/
+dist/

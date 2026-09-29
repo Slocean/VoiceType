@@ -221,8 +221,7 @@
           const hint = $('announce-hint');
           hint.hidden = false;
           hint.textContent = '📢 公告已更新（' + (lastAnn.ok ? '成功' : '失败') + '）：'
-            + lastAnn.text.split('
-')[0] + '（详见「更新与关于」页）';
+            + lastAnn.text.split('\n')[0] + '（详见「更新与关于」页）';
         } else {
           $('announce-hint').hidden = true;
         }

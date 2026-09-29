@@ -1,0 +1,132 @@
+name: ci
+
+# 提交阶段门禁（工作包 D1）：pull_request 与 push main 都执行完整 Windows 构建。
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  windows-gate:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装固定 Rust 工具链（含 rustfmt / clippy）
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: 缓存 cargo 依赖
+        uses: Swatinem/rust-cache@v2
+
+      - name: 安装 Node 22（DOM 测试）
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # 提交内容禁止空白错误（对比基线提交；首次推送基线不可用时跳过）。
+      - name: git diff --check
+        shell: pwsh
+        run: |
+          $base = "${{ github.event.pull_request.base.sha }}"
+          if (-not $base -or $base -eq '0000000000000000000000000000000000000000') {
+            $base = "${{ github.event.before }}"
+          }
+          if ($base -and $base -ne '0000000000000000000000000000000000000000') {
+            git log --check "$base..HEAD"
+            if ($LASTEXITCODE -ne 0) { throw "存在空白错误（git log --check）" }
+          } else {
+            Write-Host "基线提交不可用，跳过空白检查"
+          }
+
+      - name: cargo fmt --check
+        shell: pwsh
+        run: |
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: cargo clippy（告警即失败）
+        shell: pwsh
+        run: |
+          cargo clippy --workspace --all-targets --locked -- -D clippy::all
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # 已知现象：链接器 LNK4098（LIBCMT 冲突）。结论（2026-09-30）：该警告来自
+      # 预编译 sherpa-onnx C++ 静态库的 /MT 运行库与 Rust 默认 /MD 的组合，
+      # 非 Rust 代码引入；不影响产物正确性，如需消除须重编 sherpa-onnx。
+      - name: cargo test
+        shell: pwsh
+        run: |
+          cargo test --workspace --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Python 测试
+        shell: pwsh
+        run: |
+          python -m unittest discover -s scripts -p 'test_*.py'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: DOM 交互测试
+        shell: pwsh
+        run: |
+          npm ci --prefix ui-tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm test --prefix ui-tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      # 模型随 exe 内置：下载源文件供编译期嵌入（450MB，有缓存也需校验）。
+      - name: 准备内置模型源文件
+        shell: pwsh
+        run: ./scripts/prepare-models.ps1
+
+      - name: embedded-models 构建
+        shell: pwsh
+        run: |
+          cargo build --release -p voicetype-tray --features embedded-models --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: 隔离模型目录自检
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP ("selfcheck-" + [Guid]::NewGuid().ToString("N"))
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          $env:VOICETYPE_MODEL_DIR = $dir
+          $check = Start-Process -FilePath (Resolve-Path './target/release/voicetype-tray.exe').Path -ArgumentList '--self-check' -Wait -PassThru -WindowStyle Hidden
+          Remove-Item -LiteralPath $env:VOICETYPE_MODEL_DIR -Recurse -Force
+          if ($check.ExitCode -ne 0) { throw "最终 exe 内置模型自检失败（退出码 $($check.ExitCode)）" }
+
+      - name: 安装 Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      # 完整打包到唯一空目录（与安装包同目录，禁止复用旧 dist）。
+      - name: 完整打包
+        shell: pwsh
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP ("package-" + [Guid]::NewGuid().ToString("N"))
+          if (Test-Path $dir) { throw "候选目录不是空目录" }
+          ./scripts/package.ps1 -OutDir $dir -SkipBuild
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "PKG_DIR=$dir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: 验证发布资产
+        shell: pwsh
+        run: |
+          python scripts/verify_release.py --dist "$env:PKG_DIR"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem "$env:PKG_DIR" | Select-Object Name, Length | Format-Table | Out-String | Write-Host
+          Get-ChildItem "$env:PKG_DIR" -Filter '*.sha256' | ForEach-Object {
+            Write-Host "$($_.Name): $(Get-Content $_.FullName -Raw)"
+          }
+
+      - name: 上传构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: voicetype-win-x64
+          path: |
+            ${{ env.PKG_DIR }}/voicetype-win-x64-portable.zip
+            ${{ env.PKG_DIR }}/voicetype-setup-x64.exe
+            ${{ env.PKG_DIR }}/voicetype-tray.exe
+            ${{ env.PKG_DIR }}/*.sha256
