@@ -10,8 +10,7 @@ $ErrorActionPreference = "Stop"
 
 if (-not $SkipBuild) {
     Write-Host "准备内置模型源文件（首次较慢，约 450MB 下载）…"
-    & powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prepare-models.ps1
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & (Join-Path $PSScriptRoot "prepare-models.ps1")
 
     Write-Host "release 构建（首次较慢）…"
     cargo build --release -p voicetype-tray --features embedded-models
@@ -37,8 +36,8 @@ if (-not $smokeDir.StartsWith($outPrefix, [StringComparison]::OrdinalIgnoreCase)
 $previousModelDir = $env:VOICETYPE_MODEL_DIR
 try {
     $env:VOICETYPE_MODEL_DIR = $smokeDir
-    & $exe --self-check
-    if ($LASTEXITCODE -ne 0) { throw "实际 exe 的内置模型解压或识别引擎初始化失败（退出码 $LASTEXITCODE）" }
+    $check = Start-Process -FilePath (Resolve-Path -LiteralPath $exe).Path -ArgumentList '--self-check' -Wait -PassThru -WindowStyle Hidden
+    if ($check.ExitCode -ne 0) { throw "实际 exe 的内置模型解压或识别引擎初始化失败（退出码 $($check.ExitCode)）" }
 } finally {
     $env:VOICETYPE_MODEL_DIR = $previousModelDir
     if (Test-Path -LiteralPath $smokeDir) { Remove-Item -LiteralPath $smokeDir -Recurse -Force }

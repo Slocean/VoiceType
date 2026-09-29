@@ -142,6 +142,12 @@ fn write_if_missing(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> 
             .and_then(|_| file.sync_all())
             .map_err(|e| format!("写入模型文件 {} 失败: {e}", tmp.display()))?;
         drop(file);
+        // Windows 的 rename 不会覆盖已存在的目标。旧模型校验失败时先移走它，
+        // 否则每次启动都会在这里失败，最终表现为“模型缺失”。
+        if path.exists() {
+            std::fs::remove_file(path)
+                .map_err(|e| format!("移除损坏模型文件 {} 失败: {e}", path.display()))?;
+        }
         std::fs::rename(&tmp, path)
             .map_err(|e| format!("替换模型文件 {} 失败: {e}", path.display()))?;
         if !file_matches(path, bytes) {

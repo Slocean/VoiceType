@@ -24,6 +24,13 @@ pub fn toggle_recording(main_hwnd: HWND) {
         }
         // 模型随 exe 内置，正常情况下首次启动已解压；走到这里说明磁盘不可写等异常。
         if !models_dl::models_ready() {
+            let recovery = models_dl::ensure_models_extracted();
+            if let Err(ref e) = recovery {
+                diagnostics::record("ERROR", "models", e);
+                settings_web::set_model_error(e);
+            }
+        }
+        if !models_dl::models_ready() {
             unsafe {
                 let text = wide(
                     "语音模型未就绪（内置模型解压可能失败，请检查磁盘空间或安装目录权限）。
@@ -87,6 +94,7 @@ pub fn toggle_recording(main_hwnd: HWND) {
             }
         }
     });
+    settings_web::refresh_all();
 }
 
 // ---------- 事件消费 ----------
@@ -103,6 +111,7 @@ pub fn drain_worker_events() {
         out
     })
     .unwrap_or_default();
+    let session_changed = events.iter().any(|ev| !matches!(ev, Ev::Interim(_)));
 
     for ev in events {
         match ev {
@@ -184,6 +193,7 @@ pub fn drain_worker_events() {
             }
         }
     }
+    if session_changed { settings_web::refresh_all(); }
 }
 
 // ---------- 托盘 ----------
@@ -308,7 +318,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         }
         MENU_MAIN => {
             unsafe {
-                settings::show_settings(hwnd);
+                settings_web::show_settings(hwnd);
             }
         }
         MENU_UPDATE_CHECK => {
@@ -392,8 +402,8 @@ fn handle_update_event(hwnd: HWND) {
     if !ev.ok {
         diagnostics::record("ERROR", "updater", &ev.text);
     }
-    settings::refresh_update_status();
-    if ev.ok && !ev.ready && settings::fill_announcement(&ev.text) {
+    settings_web::refresh_update_status();
+    if ev.ok && !ev.ready && settings_web::fill_announcement(&ev.text) {
         return;
     }
     unsafe {
@@ -450,8 +460,8 @@ pub(crate) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
             handle_update_event(hwnd);
             LRESULT(0)
         }
-        WM_NOTIFY => {
-            settings::on_notify(hwnd, lparam);
+        WM_SETTINGS_READY => {
+            settings_web::refresh_all();
             LRESULT(0)
         }
         WM_TRAY_CALLBACK => {
@@ -460,14 +470,7 @@ pub(crate) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 show_tray_menu(hwnd);
             } else if mouse == WM_LBUTTONDBLCLK {
                 // 双击托盘：打开主界面（录音开关走 F9，避免与窗口操作混淆）。
-                settings::show_settings(hwnd);
-            }
-            LRESULT(0)
-        }
-        WM_COMMAND => {
-            let id = (wparam.0 & 0xFFFF) as i32;
-            unsafe {
-                settings::on_command(hwnd, id);
+                settings_web::show_settings(hwnd);
             }
             LRESULT(0)
         }
@@ -483,6 +486,9 @@ pub(crate) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
             }
         }
         WM_DESTROY => {
+            if with_app(|app| app.main_hwnd != hwnd).unwrap_or(true) {
+                return LRESULT(0);
+            }
             // 退出前收尾：移除托盘、停掉进行中的录音。
             remove_tray_icon(hwnd);
             let _ = UnregisterHotKey(Some(hwnd), HOTKEY_ID);
@@ -628,7 +634,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         let _ = ShowWindow(overlay, SW_SHOW);
         // 首次使用（模型未就绪）时直接打开主界面引导下载，同时冒泡提示托盘位置。
         if !models_dl::models_ready() {
-            settings::show_settings(hwnd);
+            settings_web::show_settings(hwnd);
             show_tray_balloon(
                 hwnd,
                 "VoiceType 已在后台运行",

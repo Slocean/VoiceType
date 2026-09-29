@@ -39,6 +39,7 @@ mod ui_main;
 mod updater;
 mod models_dl;
 mod settings;
+mod settings_web;
 mod diagnostics;
 
 // ---------- 入口 ----------
@@ -116,6 +117,7 @@ const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 const WM_WORKER_EVENT: u32 = WM_APP + 2;
 /// 更新后台任务（检查/下载/公告）完成事件。
 const WM_UPDATE_EVENT: u32 = WM_APP + 3;
+const WM_SETTINGS_READY: u32 = WM_APP + 4;
 const HOTKEY_ID: i32 = 1;
 const TRAY_UID: u32 = 1;
 

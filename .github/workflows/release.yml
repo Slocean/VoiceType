@@ -65,8 +65,8 @@ jobs:
           }
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $env:VOICETYPE_MODEL_DIR = Join-Path $env:RUNNER_TEMP 'voicetype-smoke-models'
-          ./dist/voicetype-tray.exe --self-check
-          if ($LASTEXITCODE -ne 0) { throw '最终便携 exe 的模型解压或识别引擎初始化失败' }
+          $check = Start-Process -FilePath (Resolve-Path './dist/voicetype-tray.exe').Path -ArgumentList '--self-check' -Wait -PassThru -WindowStyle Hidden
+          if ($check.ExitCode -ne 0) { throw "最终便携 exe 的模型解压或识别引擎初始化失败（退出码 $($check.ExitCode)）" }
 
       # 从 app_update.json 提取当前 tag 的更新公告作为 Release 正文。
       - name: 生成更新公告

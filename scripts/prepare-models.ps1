@@ -1,4 +1,4 @@
-# 下载内置模型源文件到 apps/tray/embedded-models/（供 --features embedded-models 编译嵌入）。
+﻿# 下载内置模型源文件到 apps/tray/embedded-models/（供 --features embedded-models 编译嵌入）。
 # 幂等：源文件已存在且超过最低体积时跳过；最终 exe 在 CI 中初始化真实模型验收。
 # 用法：.\scripts\prepare-models.ps1 [-Dir apps\tray\embedded-models]
 param([string]$Dir = "apps\tray\embedded-models")

@@ -44,3 +44,5 @@ windows = { version = "0.62", features = [
     # 开机自启：HKCU\...\Run 注册表读写。
     "Win32_System_Registry",
 ] }
+wry = { version = "0.55", default-features = false }
+raw-window-handle = "0.6"
