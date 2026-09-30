@@ -1,0 +1,16 @@
+{
+  "name": "voicetype-ui-tests",
+  "private": true,
+  "version": "0.8.0",
+  "description": "VoiceType 设置界面 DOM 交互测试（模拟 IPC，不依赖 WebView2）",
+  "type": "module",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jsdom": "^24.1.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

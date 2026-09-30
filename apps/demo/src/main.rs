@@ -8,7 +8,9 @@
 use std::env;
 use std::thread::sleep;
 use std::time::Duration;
-use voicetype_inject::{ClipboardInjector, HybridInjector, StreamingInjector, TextInjector, TypingInjector};
+use voicetype_inject::{
+    ClipboardInjector, HybridInjector, StreamingInjector, TextInjector, TypingInjector,
+};
 
 fn main() {
     let args: Vec<String> = env::args().collect();

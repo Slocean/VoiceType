@@ -4,11 +4,15 @@
 //! drain_worker_events 串行消费。录音启停逻辑见 toggle_recording。
 
 use super::*;
-use windows::Win32::UI::Input::KeyboardAndMouse::{HOT_KEY_MODIFIERS, RegisterHotKey, UnregisterHotKey};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    RegisterHotKey, UnregisterHotKey, HOT_KEY_MODIFIERS,
+};
 
 // ---------- 录音开关与事件处理 ----------
 
 pub fn toggle_recording(main_hwnd: HWND) {
+    // 在可变借用之外捕获前台目标（内部需要读取 App，避免 RefCell 嵌套借用）。
+    let fresh_target = control::capture_record_target();
     with_app(|app| {
         if app.recording {
             // 手动停止：由 worker 冲刷识别结果，随后按正常 Final/Empty 路径收尾。
@@ -22,27 +26,27 @@ pub fn toggle_recording(main_hwnd: HWND) {
             set_window_text(app.overlay_text, "正在结束录音并生成定稿…");
             return;
         }
-        // 模型随 exe 内置，正常情况下首次启动已解压；走到这里说明磁盘不可写等异常。
-        if !models_dl::models_ready() {
-            unsafe {
-                let text = wide(
-                    "语音模型未就绪（内置模型解压可能失败，请检查磁盘空间或安装目录权限）。
-
-排除后重启应用即可。",
-                );
-                let title = wide("VoiceType 模型异常");
-                let _ = MessageBoxW(
-                    Some(main_hwnd),
-                    PCWSTR(text.as_ptr()),
-                    PCWSTR(title.as_ptr()),
-                    MB_ICONWARNING,
-                );
-            }
+        // B2：记录录音开始时的外部前台窗口；自身窗口等无效目标记为 None，
+        // 定稿时文本复制到剪贴板而不是注入。
+        app.record_target = fresh_target;
+        app.interim_paused = false;
+        // 录音前校验模型：主线程只做存在性/长度检查（不散列、不写模型），
+        // 检查失败时 manager 会在后台修复，界面随状态刷新。
+        let Some(manager) = model_manager::global() else {
             return;
-        }
-        // 启动新的识别会话。
-        let model_dir = resolve_model_dir();
-        let Some(asr_cfg) = find_model_files(&model_dir) else {
+        };
+        let (model_dir, _kind) = match manager.ensure_ready_for_record() {
+            Ok(result) => result,
+            Err(message) => {
+                diagnostics::record("WARN", "models", &message);
+                set_window_text(app.overlay_text, &format!("⚠ {message}"));
+                unsafe {
+                    let _ = ShowWindow(app.overlay, SW_SHOW);
+                }
+                return;
+            }
+        };
+        let Some(asr_paths) = manager.scan_asr_files(&model_dir) else {
             set_window_text(
                 app.overlay_text,
                 &format!("ASR 模型缺失: {}", model_dir.display()),
@@ -52,7 +56,9 @@ pub fn toggle_recording(main_hwnd: HWND) {
             }
             return;
         };
-        let Some(vad_model) = find_vad_model(&model_dir) else {
+        let Some(vad_model) =
+            manager.find_vad_model(&model_dir, model_dir.parent().unwrap_or(Path::new(".")))
+        else {
             set_window_text(
                 app.overlay_text,
                 &format!("VAD 模型缺失: {}", model_dir.display()),
@@ -65,7 +71,7 @@ pub fn toggle_recording(main_hwnd: HWND) {
         let (cmd_tx, cmd_rx) = mpsc::channel();
         match start_worker(
             NotifyHwnd(main_hwnd),
-            asr_cfg,
+            super::engine_config(asr_paths),
             vad_model,
             cmd_rx,
         ) {
@@ -87,6 +93,7 @@ pub fn toggle_recording(main_hwnd: HWND) {
             }
         }
     });
+    settings_web::refresh_all();
 }
 
 // ---------- 事件消费 ----------
@@ -103,6 +110,7 @@ pub fn drain_worker_events() {
         out
     })
     .unwrap_or_default();
+    let session_changed = events.iter().any(|ev| !matches!(ev, Ev::Interim(_)));
 
     for ev in events {
         match ev {
@@ -111,12 +119,31 @@ pub fn drain_worker_events() {
                     if !app.recording {
                         return;
                     }
-                    set_window_text(app.overlay_text, &format!("🎤 {text}"));
                     if app.mode == InjectMode::Hybrid {
-                        if let Err(e) = app.hybrid.update_interim(&text) {
-                            diagnostics::record("ERROR", "injection", &e.to_string());
-                            set_window_text(app.overlay_text, &format!("实时上屏失败：{e}"));
+                        // B2：中间结果上屏前确认目标仍是录音开始时的窗口。
+                        let ready = app.record_target.is_some_and(control::target_ready);
+                        if ready {
+                            app.interim_paused = false;
+                            set_window_text(app.overlay_text, &format!("🎤 {text}"));
+                            if let Err(e) = app.hybrid.update_interim(&text) {
+                                diagnostics::record("ERROR", "injection", &e.to_string());
+                                set_window_text(app.overlay_text, &format!("实时上屏失败：{e}"));
+                            }
+                        } else if !app.interim_paused {
+                            // 焦点移走：立即停止向任何窗口键入，保持提示可见。
+                            app.interim_paused = true;
+                            diagnostics::record(
+                                "INFO",
+                                "injection",
+                                "目标窗口已切换，暂停实时上屏",
+                            );
+                            set_window_text(
+                                app.overlay_text,
+                                "⚠ 目标窗口已切换，暂停实时上屏；结束后文本将复制到剪贴板",
+                            );
                         }
+                    } else {
+                        set_window_text(app.overlay_text, &format!("🎤 {text}"));
                     }
                 });
             }
@@ -130,24 +157,39 @@ pub fn drain_worker_events() {
                         let _ = h.join();
                     }
                     set_overlay_idle(app.overlay_text, &app.hotkey_name);
-                    let result = match app.mode {
-                        InjectMode::Paste => {
-                            ClipboardInjector::default().inject(&text)
-                        }
-                        InjectMode::Type => {
-                            TypingInjector::default().inject(&text)
-                        }
-                        InjectMode::Hybrid => {
-                            if text.is_empty() {
-                                app.hybrid.cancel()
-                            } else {
-                                app.hybrid.commit(&text)
+                    // B2：定稿前确认目标窗口。失效时绝不注入/退格，文本复制到剪贴板。
+                    let target_ok = app.record_target.is_some_and(control::target_ready);
+                    let result: Result<(), String> = if !target_ok {
+                        app.hybrid.reset();
+                        control::deliver_text_without_target(&text)
+                    } else {
+                        match app.mode {
+                            InjectMode::Paste => ClipboardInjector::default()
+                                .inject(&text)
+                                .map_err(|e| e.to_string()),
+                            InjectMode::Type => TypingInjector::default()
+                                .inject(&text)
+                                .map_err(|e| e.to_string()),
+                            InjectMode::Hybrid => {
+                                let r = if text.is_empty() {
+                                    app.hybrid.cancel()
+                                } else {
+                                    app.hybrid.commit(&text)
+                                };
+                                r.map_err(|e| e.to_string())
                             }
                         }
                     };
-                    if let Err(e) = result {
-                        diagnostics::record("ERROR", "injection", &e.to_string());
-                        set_window_text(app.overlay_text, &format!("文本注入失败：{e}"));
+                    match result {
+                        Ok(()) if !target_ok && !text.is_empty() => set_window_text(
+                            app.overlay_text,
+                            "目标窗口已切换：识别文本已复制到剪贴板，请自行粘贴",
+                        ),
+                        Err(e) => {
+                            diagnostics::record("ERROR", "injection", &e.to_string());
+                            set_window_text(app.overlay_text, &format!("文本注入失败：{e}"));
+                        }
+                        _ => {}
                     }
                 });
             }
@@ -161,11 +203,14 @@ pub fn drain_worker_events() {
                     if let Some(h) = app.worker.take() {
                         let _ = h.join();
                     }
-                    let _ = app.hybrid.cancel();
-                    set_window_text(
-                        app.overlay_text,
-                        "未检测到语音，已自动停止（按 F9 重试）",
-                    );
+                    // 目标失效时退格会落入新窗口：只清状态，不发按键。
+                    let target_ok = app.record_target.is_some_and(control::target_ready);
+                    if target_ok {
+                        let _ = app.hybrid.cancel();
+                    } else {
+                        app.hybrid.reset();
+                    }
+                    set_window_text(app.overlay_text, "未检测到语音，已自动停止（按快捷键重试）");
                 });
             }
             Ev::Error(msg) => {
@@ -178,11 +223,19 @@ pub fn drain_worker_events() {
                     if let Some(h) = app.worker.take() {
                         let _ = h.join();
                     }
-                    let _ = app.hybrid.cancel();
+                    let target_ok = app.record_target.is_some_and(control::target_ready);
+                    if target_ok {
+                        let _ = app.hybrid.cancel();
+                    } else {
+                        app.hybrid.reset();
+                    }
                     set_window_text(app.overlay_text, &format!("⚠ {msg}"));
                 });
             }
         }
+    }
+    if session_changed {
+        settings_web::refresh_all();
     }
 }
 
@@ -197,7 +250,7 @@ unsafe fn load_app_icon(hinst: HINSTANCE, small: bool) -> HICON {
         (GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON))
     };
     LoadImageW(
-        Some(hinst.into()),
+        Some(hinst),
         PCWSTR(1 as _),
         IMAGE_ICON,
         cx,
@@ -222,7 +275,9 @@ unsafe fn add_tray_icon(hwnd: HWND) {
         ..Default::default()
     };
     let name = with_app(|app| app.hotkey_name.clone()).unwrap_or_else(|| "F9".into());
-    let tip = wide(&format!("VoiceType 语音输入（按 {name} 开始，停顿自动结束）"));
+    let tip = wide(&format!(
+        "VoiceType 语音输入（按 {name} 开始，停顿自动结束）"
+    ));
     data.szTip[..tip.len() - 1].copy_from_slice(&tip[..tip.len() - 1]);
     let _ = Shell_NotifyIconW(NIM_ADD, &data);
 }
@@ -249,8 +304,10 @@ unsafe fn show_tray_balloon(hwnd: HWND, title: &str, text: &str) {
     };
     let t = wide(title);
     let b = wide(text);
-    data.szInfoTitle[..t.len() - 1].copy_from_slice(&t[..t.len() - 1]);
-    data.szInfo[..b.len() - 1].copy_from_slice(&b[..b.len() - 1]);
+    let tn = (t.len() - 1).min(data.szInfoTitle.len());
+    data.szInfoTitle[..tn].copy_from_slice(&t[..tn]);
+    let bn = (b.len() - 1).min(data.szInfo.len());
+    data.szInfo[..bn].copy_from_slice(&b[..bn]);
     let _ = Shell_NotifyIconW(NIM_MODIFY, &data);
 }
 
@@ -258,13 +315,21 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     let mode = with_app(|app| app.mode).unwrap_or(InjectMode::Hybrid);
     let Ok(menu) = CreatePopupMenu() else { return };
     let item = |id: i32, label: &str, checked: bool| {
-        let flags = if checked { MF_STRING | MF_CHECKED } else { MF_STRING };
+        let flags = if checked {
+            MF_STRING | MF_CHECKED
+        } else {
+            MF_STRING
+        };
         let text = wide(label);
         let _ = AppendMenuW(menu, flags, id as usize, PCWSTR(text.as_ptr()));
     };
     item(MENU_MODE_PASTE, "粘贴模式", mode == InjectMode::Paste);
     item(MENU_MODE_TYPE, "键入模式", mode == InjectMode::Type);
-    item(MENU_MODE_HYBRID, "混合模式（流式）", mode == InjectMode::Hybrid);
+    item(
+        MENU_MODE_HYBRID,
+        "混合模式（流式）",
+        mode == InjectMode::Hybrid,
+    );
     let sep = wide("");
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR(sep.as_ptr()));
     item(MENU_MAIN, "主界面…", false);
@@ -280,6 +345,8 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     let quit = wide("退出");
     let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT as usize, PCWSTR(quit.as_ptr()));
 
+    // B2：菜单会抢走前台焦点；关闭后恢复之前的外部前台窗口。
+    let previous_fg = GetForegroundWindow();
     let mut pt = POINT::default();
     let _ = GetCursorPos(&mut pt);
     // TrackPopupMenu 要求窗口在前台，否则点击菜单外区域不收起菜单。
@@ -296,6 +363,7 @@ unsafe fn show_tray_menu(hwnd: HWND) {
     );
     let _ = DestroyMenu(menu);
 
+    let mut opened_settings = false;
     match ret.0 {
         MENU_MODE_PASTE => {
             with_app(|app| app.mode = InjectMode::Paste);
@@ -308,8 +376,9 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         }
         MENU_MAIN => {
             unsafe {
-                settings::show_settings(hwnd);
+                settings_web::show_settings(hwnd);
             }
+            opened_settings = true;
         }
         MENU_UPDATE_CHECK => {
             set_window_text(
@@ -326,46 +395,32 @@ unsafe fn show_tray_menu(hwnd: HWND) {
         }
         _ => {}
     }
+    // 主界面自己要获得前台；其余情况把焦点还给用户原来所在的窗口。
+    if !opened_settings && !previous_fg.is_invalid() && IsWindow(Some(previous_fg)).as_bool() {
+        let _ = SetForegroundWindow(previous_fg);
+    }
 }
 
 fn overlay_text_of(hwnd: HWND) -> HWND {
     with_app(|app| app.overlay_text).unwrap_or(hwnd)
 }
 
-/// 应用新的录音热键：先注销旧的，注册成功才更新状态与托盘提示；
-/// 失败（冲突/被占用）时回退注册原热键，返回 false 供 UI 提示。
-pub fn apply_new_hotkey(vk: u32, mods: u32) -> bool {
+/// 在悬浮条上显示一条用户可见消息（控制层提示用）。
+pub fn set_overlay_message(text: &str) {
     let hwnd = with_app(|app| app.main_hwnd).unwrap_or_default();
     if hwnd.is_invalid() {
-        return false;
+        return;
     }
+    set_window_text(overlay_text_of(hwnd), text);
     unsafe {
-        // 注册和注销必须使用同一窗口句柄，否则旧热键会继续生效。
-        let _ = UnregisterHotKey(Some(hwnd), HOTKEY_ID);
-        if RegisterHotKey(Some(hwnd), HOTKEY_ID, HOT_KEY_MODIFIERS(mods | MOD_NOREPEAT.0), vk).is_ok() {
-            with_app(|app| {
-                app.hotkey_vk = vk;
-                app.hotkey_mods = mods;
-                app.hotkey_name = settings::combo_text(vk, mods);
-            });
-            update_tray_tip(hwnd);
-            true
-        } else {
-            let (ovk, omods) =
-                with_app(|app| (app.hotkey_vk, app.hotkey_mods)).unwrap_or((0x78, 0));
-            let _ = RegisterHotKey(
-                Some(hwnd),
-                HOTKEY_ID,
-                HOT_KEY_MODIFIERS(omods | MOD_NOREPEAT.0),
-                ovk,
-            );
-            false
+        if let Some(overlay) = with_app(|app| app.overlay) {
+            let _ = ShowWindow(overlay, SW_SHOW);
         }
     }
 }
 
 /// 托盘气泡提示跟随当前热键。
-fn update_tray_tip(hwnd: HWND) {
+pub fn update_tray_tip(hwnd: HWND) {
     let name = with_app(|app| app.hotkey_name.clone()).unwrap_or_default();
     let mut data = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
@@ -374,7 +429,9 @@ fn update_tray_tip(hwnd: HWND) {
         uFlags: NIF_TIP,
         ..Default::default()
     };
-    let tip = wide(&format!("VoiceType 语音输入（按 {name} 开始，停顿自动结束）"));
+    let tip = wide(&format!(
+        "VoiceType 语音输入（按 {name} 开始，停顿自动结束）"
+    ));
     let n = tip.len().min(data.szTip.len());
     data.szTip[..n].copy_from_slice(&tip[..n]);
     unsafe {
@@ -386,46 +443,80 @@ fn set_overlay_idle(overlay_text: HWND, name: &str) {
     set_window_text(overlay_text, &format!("🎤 就绪 — 按 {name} 开始说话"));
 }
 
-/// 更新后台任务完成：主界面开着则把公告写进窗口，否则弹窗；可应用时询问重启。
+/// 更新后台任务完成：按事件类别（检查更新/公告）分发；结果持久保存并在
+/// 界面展示；托盘触发且页面不可见时用气泡兜底；新版就绪时保留确认重启流程。
 fn handle_update_event(hwnd: HWND) {
-    let Some(ev) = updater::take_update_event() else { return };
+    let Some(ev) = updater::take_update_event() else {
+        return;
+    };
     if !ev.ok {
         diagnostics::record("ERROR", "updater", &ev.text);
     }
-    settings::refresh_update_status();
-    if ev.ok && !ev.ready && settings::fill_announcement(&ev.text) {
-        return;
-    }
-    unsafe {
-        let title = wide(if ev.ok { "VoiceType 更新" } else { "VoiceType 更新失败" });
-        let text = wide(&ev.text);
-        let flags = if ev.ready {
-            MB_ICONINFORMATION | MB_YESNO
-        } else if ev.ok {
-            MB_ICONINFORMATION
-        } else {
-            MB_ICONWARNING
-        };
-        let choice = MessageBoxW(
-            Some(hwnd),
-            PCWSTR(text.as_ptr()),
-            PCWSTR(title.as_ptr()),
-            flags,
-        );
-        if ev.ready && choice == IDYES {
-            // 助手已拉起：等本进程退出后（便携）换 exe 重启 /（安装版）静默重装。
-            match updater::apply_update_and_restart() {
-                Ok(()) => {
-                    let _ = DestroyWindow(hwnd);
-                }
-                Err(e) => {
-                    let t = wide(&format!("应用更新失败：{e}"));
-                    let _ = MessageBoxW(
+    let first_line: String = ev.text.lines().next().unwrap_or_default().to_string();
+    match ev.kind {
+        updater::UpdateEventKind::Check => {
+            with_app(|app| app.last_check = Some((ev.ok, ev.text.clone())));
+            settings_web::refresh_update_status();
+            let seq = control::take_pending("checkUpdate");
+            if let Some(seq) = seq {
+                settings_web::deliver_done(seq, "checkUpdate", ev.ok, &ev.text);
+            }
+            if ev.ready {
+                // 新版已下载校验完毕：询问后重启（托盘与页面触发都走这里）。
+                unsafe {
+                    let title = wide("VoiceType 更新");
+                    let text = wide(&ev.text);
+                    let choice = MessageBoxW(
                         Some(hwnd),
-                        PCWSTR(t.as_ptr()),
+                        PCWSTR(text.as_ptr()),
                         PCWSTR(title.as_ptr()),
-                        MB_ICONWARNING,
+                        MB_ICONINFORMATION | MB_YESNO,
                     );
+                    if choice == IDYES {
+                        // 助手已拉起：等本进程退出后（便携）换 exe 重启 /（安装版）静默重装。
+                        match updater::apply_update_and_restart() {
+                            Ok(()) => {
+                                let _ = DestroyWindow(hwnd);
+                            }
+                            Err(e) => {
+                                let t = wide(&format!("应用更新失败：{e}"));
+                                let _ = MessageBoxW(
+                                    Some(hwnd),
+                                    PCWSTR(t.as_ptr()),
+                                    PCWSTR(title.as_ptr()),
+                                    MB_ICONWARNING,
+                                );
+                            }
+                        }
+                    }
+                }
+            } else if seq.is_none() {
+                // 托盘触发（无界面动作编号）：气泡兜底；持久结果在更新页可查。
+                let title = if ev.ok {
+                    "VoiceType 更新"
+                } else {
+                    "VoiceType 更新失败"
+                };
+                unsafe {
+                    show_tray_balloon(hwnd, title, &first_line);
+                }
+            }
+        }
+        updater::UpdateEventKind::Announcement => {
+            with_app(|app| app.last_announcement = Some((ev.ok, ev.text.clone())));
+            let delivered = settings_web::fill_announcement(&ev.text);
+            if let Some(seq) = control::take_pending("announcement") {
+                settings_web::deliver_done(seq, "announcement", ev.ok, &ev.text);
+            }
+            if !delivered {
+                // 页面不可见：气泡兜底；持久结果保存在「更新与关于」页。
+                let title = if ev.ok {
+                    "更新公告"
+                } else {
+                    "获取公告失败"
+                };
+                unsafe {
+                    show_tray_balloon(hwnd, title, &first_line);
                 }
             }
         }
@@ -434,7 +525,12 @@ fn handle_update_event(hwnd: HWND) {
 
 // ---------- 窗口过程 ----------
 
-pub(crate) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+pub(crate) unsafe extern "system" fn wndproc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
     match msg {
         WM_HOTKEY => {
             if wparam.0 as i32 == HOTKEY_ID {
@@ -450,8 +546,15 @@ pub(crate) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
             handle_update_event(hwnd);
             LRESULT(0)
         }
-        WM_NOTIFY => {
-            settings::on_notify(hwnd, lparam);
+        WM_SETTINGS_READY => {
+            settings_web::refresh_all();
+            LRESULT(0)
+        }
+        WM_SIZE => {
+            // C2：设置窗口尺寸变化（含 DPI/显示器切换）时同步 WebView 子窗口。
+            if with_app(|app| app.settings == hwnd).unwrap_or(false) {
+                settings_web::resize_webview(hwnd);
+            }
             LRESULT(0)
         }
         WM_TRAY_CALLBACK => {
@@ -460,14 +563,7 @@ pub(crate) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
                 show_tray_menu(hwnd);
             } else if mouse == WM_LBUTTONDBLCLK {
                 // 双击托盘：打开主界面（录音开关走 F9，避免与窗口操作混淆）。
-                settings::show_settings(hwnd);
-            }
-            LRESULT(0)
-        }
-        WM_COMMAND => {
-            let id = (wparam.0 & 0xFFFF) as i32;
-            unsafe {
-                settings::on_command(hwnd, id);
+                settings_web::show_settings(hwnd);
             }
             LRESULT(0)
         }
@@ -483,6 +579,9 @@ pub(crate) unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARA
             }
         }
         WM_DESTROY => {
+            if with_app(|app| app.main_hwnd != hwnd).unwrap_or(true) {
+                return LRESULT(0);
+            }
             // 退出前收尾：移除托盘、停掉进行中的录音。
             remove_tray_icon(hwnd);
             let _ = UnregisterHotKey(Some(hwnd), HOTKEY_ID);
@@ -593,11 +692,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 hotkey_vk: 0x78,
                 hotkey_mods: 0,
                 hotkey_name: "F9".to_string(),
+                store: std::sync::Arc::new(settings::RegistryStore),
+                record_target: None,
+                interim_paused: false,
+                pending: std::collections::HashMap::new(),
+                last_check: None,
+                last_announcement: None,
             });
         });
 
         // 加载用户自定义热键（默认 F9），注册失败时提示不退出。
-        let (hotkey_vk, hotkey_mods) = settings::load_hotkey();
+        let (hotkey_vk, hotkey_mods) =
+            with_app(|app| app.store.load_hotkey()).unwrap_or((settings::DEFAULT_HOTKEY_VK, 0));
         let hotkey_name = settings::combo_text(hotkey_vk, hotkey_mods);
         with_app(|app| {
             app.hotkey_vk = hotkey_vk;
@@ -624,16 +730,23 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         add_tray_icon(hwnd);
         // 悬浮条常驻：就绪态常显，录音时显示识别文本。
-        set_window_text(overlay_text, &format!("🎤 就绪 — 按 {} 开始说话", hotkey_name));
+        set_window_text(
+            overlay_text,
+            &format!("🎤 就绪 — 按 {} 开始说话", hotkey_name),
+        );
         let _ = ShowWindow(overlay, SW_SHOW);
-        // 首次使用（模型未就绪）时直接打开主界面引导下载，同时冒泡提示托盘位置。
-        if !models_dl::models_ready() {
-            settings::show_settings(hwnd);
-            show_tray_balloon(
-                hwnd,
-                "VoiceType 已在后台运行",
-                "主界面已打开：内置模型未就绪，请检查磁盘空间或安装目录权限。",
-            );
+        // 后台修复结果要能刷新界面：把主窗口句柄交给模型管理器。
+        if let Some(manager) = model_manager::global() {
+            manager.set_notify_hwnd(hwnd.0 as isize);
+            // 首次使用（快速检查模型未就绪）时打开主界面引导，同时冒泡提示托盘位置。
+            if !manager.quick_ready() {
+                settings_web::show_settings(hwnd);
+                show_tray_balloon(
+                    hwnd,
+                    "VoiceType 已在后台运行",
+                    "主界面已打开：内置模型未就绪，正在后台修复，请查看模型状态。",
+                );
+            }
         }
 
         let mut msg = MSG::default();

@@ -21,6 +21,13 @@ pub struct HybridInjector {
 }
 
 impl HybridInjector {
+    /// 不发送任何按键，直接清空内部状态。
+    /// 目标窗口已切换时使用：退格会落入新窗口，禁止盲目清理。
+    pub fn reset(&mut self) {
+        self.interim_chars = 0;
+        self.last_interim.clear();
+    }
+
     /// 退格撤销全部已上屏的中间字符。
     fn erase_interim(&mut self) -> Result<(), InjectError> {
         for _ in 0..self.interim_chars {

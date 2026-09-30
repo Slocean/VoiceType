@@ -35,11 +35,14 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 mod worker;
 use worker::start_worker;
 
+mod control;
+mod diagnostics;
+mod model_manager;
+mod settings;
+mod settings_native;
+mod settings_web;
 mod ui_main;
 mod updater;
-mod models_dl;
-mod settings;
-mod diagnostics;
 
 // ---------- 入口 ----------
 
@@ -51,12 +54,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     };
     diagnostics::record("INFO", "startup", updater::APP_VERSION);
-    // 首次启动把内置模型解压到模型目录（幂等，约 50MB 只在首次发生）。
-    if let Err(e) = models_dl::ensure_models_extracted() {
-        // 解压失败不阻断启动：F9 时会给出明确提示。
-        diagnostics::record("ERROR", "models", &e);
-        eprintln!("内置模型解压失败: {e}");
-    }
+    // 启动即后台检查/修复模型（含首次解压，约 50MB 只在首次发生）；
+    // 主线程不做散列与写入，模型状态经 manager 查询，UI 收到通知后刷新。
+    let manager = model_manager::init_global();
+    manager.start_check_and_repair();
     ui_main::run()
 }
 
@@ -96,18 +97,35 @@ fn self_check() -> Result<(), Box<dyn std::error::Error>> {
     if !cfg!(feature = "embedded-models") {
         return Err("自检要求使用内置模型构建".into());
     }
-    models_dl::ensure_models_extracted()?;
-    let model_dir = resolve_model_dir();
-    let asr_config = find_model_files(&model_dir)
-        .ok_or_else(|| format!("识别模型不完整: {}", model_dir.display()))?;
-    let vad_path = find_vad_model(&model_dir)
-        .ok_or_else(|| format!("VAD 模型不完整: {}", model_dir.display()))?;
-    let _asr = voicetype_asr::SherpaAsr::new(&asr_config)?;
+    let manager = model_manager::init_global();
+    let status = manager.run_check_and_repair();
+    let dir = match status {
+        model_manager::ModelStatus::Ready { dir, .. } => dir,
+        other => return Err(format!("模型自检失败：{}", other.summary()).into()),
+    };
+    let asr_paths = manager
+        .scan_asr_files(&dir)
+        .ok_or_else(|| format!("识别模型不完整: {}", dir.display()))?;
+    let vad_path = manager
+        .find_vad_model(&dir, dir.parent().unwrap_or(Path::new(".")))
+        .ok_or_else(|| format!("VAD 模型不完整: {}", dir.display()))?;
+    let _asr = voicetype_asr::SherpaAsr::new(&engine_config(asr_paths))?;
     let _vad = voicetype_asr::SherpaVad::new(&voicetype_asr::SherpaVadConfig {
         model: vad_path,
         ..Default::default()
     })?;
     Ok(())
+}
+
+/// 由扫描到的模型文件路径构造识别引擎配置（int8 优先在扫描时决定）。
+fn engine_config(paths: model_manager::AsrFilePaths) -> SherpaAsrConfig {
+    SherpaAsrConfig {
+        encoder: paths.encoder,
+        decoder: paths.decoder,
+        joiner: paths.joiner,
+        tokens: paths.tokens,
+        num_threads: 2,
+    }
 }
 
 // ---------- 常量 ----------
@@ -116,6 +134,7 @@ const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 const WM_WORKER_EVENT: u32 = WM_APP + 2;
 /// 更新后台任务（检查/下载/公告）完成事件。
 const WM_UPDATE_EVENT: u32 = WM_APP + 3;
+const WM_SETTINGS_READY: u32 = WM_APP + 4;
 const HOTKEY_ID: i32 = 1;
 const TRAY_UID: u32 = 1;
 
@@ -132,22 +151,8 @@ const OVERLAY_H: i32 = 72;
 /// STATIC 控件样式：居中 + 垂直居中。
 const SS_CENTER_TEXT: u32 = 0x1 | 0x200;
 
-/// 与内置模型解压和就绪检查共用模型路径；兼容环境变量直接指向识别模型目录。
-fn resolve_model_dir() -> PathBuf {
-    let root = models_dl::models_root();
-    if root.join("tokens.txt").is_file() {
-        return root;
-    }
-    let current = root.join(models_dl::MODEL_SUBDIR);
-    if find_model_files(&current).is_some() && find_vad_model(&current).is_some() {
-        return current;
-    }
-    let legacy = root.join(models_dl::LEGACY_MODEL_SUBDIR);
-    if find_model_files(&legacy).is_some() && find_vad_model(&legacy).is_some() {
-        return legacy;
-    }
-    current
-}
+// 模型目录解析已统一收敛到 model_manager（显式目录/默认目录优先级、清单校验、
+// 事务修复），调用方不再自行拼装文件存在性检查。
 
 // ---------- 线程间消息 ----------
 
@@ -179,7 +184,7 @@ impl NotifyHwnd {
 
 // ---------- 应用状态（仅主线程访问） ----------
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum InjectMode {
     Paste,
     Type,
@@ -205,6 +210,18 @@ struct App {
     hotkey_mods: u32,
     /// 热键组合的显示文本（如 "Ctrl + F9"），托盘提示与悬浮条文案用。
     hotkey_name: String,
+    /// 设置存储（注册表实现；测试通过控制层注入）。
+    store: std::sync::Arc<dyn settings::SettingsStore>,
+    /// 录音开始时捕获的外部前台目标窗口（None=无可靠目标，定稿不注入）。
+    record_target: Option<isize>,
+    /// 混合模式目标失效后暂停实时上屏（恢复目标后自动继续）。
+    interim_paused: bool,
+    /// 进行中的异步 UI 动作：seq → 动作键；完成时取走并交付最终结果。
+    pending: std::collections::HashMap<u64, String>,
+    /// 最近一次检查更新结果（ok, 文本）。持久展示，直到下一次请求替换。
+    last_check: Option<(bool, String)>,
+    /// 最近一次公告获取结果（ok, 文本）。持久展示，直到下一次请求替换。
+    last_announcement: Option<(bool, String)>,
 }
 
 thread_local! {
@@ -226,57 +243,6 @@ fn set_window_text(hwnd: HWND, text: &str) {
     unsafe {
         let _ = SetWindowTextW(hwnd, PCWSTR(buf.as_ptr()));
     }
-}
-
-/// 在模型目录内定位四件模型文件（优先 int8 量化版）。
-fn find_model_files(dir: &Path) -> Option<SherpaAsrConfig> {
-    let pick = |prefix: &str| -> Option<PathBuf> {
-        // 文件名带 epoch/avg 后缀，按前缀扫描目录，int8 量化版优先。
-        let rd = std::fs::read_dir(dir).ok()?;
-        let mut candidates: Vec<PathBuf> = rd
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| {
-                p.is_file()
-                    && p.file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|n| n.starts_with(prefix) && n.ends_with(".onnx"))
-                        .unwrap_or(false)
-            })
-            .collect();
-        candidates.sort_by_key(|p| {
-            let name = p.file_name().unwrap().to_string_lossy().into_owned();
-            if name.contains(".int8.") { 0 } else { 1 }
-        });
-        candidates.into_iter().next()
-    };
-    Some(SherpaAsrConfig {
-        encoder: pick("encoder")?,
-        decoder: pick("decoder")?,
-        joiner: pick("joiner")?,
-        tokens: {
-            let t = dir.join("tokens.txt");
-            t.is_file().then_some(t)?
-        },
-        num_threads: 2,
-    })
-}
-
-/// 在识别模型目录及其父目录（models\ 根）内定位 VAD 模型。
-fn find_vad_model(model_dir: &Path) -> Option<PathBuf> {
-    let mut dirs = vec![model_dir.to_path_buf()];
-    if let Some(parent) = model_dir.parent() {
-        dirs.push(parent.to_path_buf());
-    }
-    for dir in dirs {
-        for name in ["silero_vad.onnx", "vad.onnx"] {
-            let p = dir.join(name);
-            if p.is_file() {
-                return Some(p);
-            }
-        }
-    }
-    None
 }
 
 // ---------- 录音开关与事件处理（主线程，见 ui_main） ----------

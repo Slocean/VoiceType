@@ -68,17 +68,39 @@ where
 {
     let stream_config = config.config();
     match config.sample_format() {
-        SampleFormat::I8 => build_typed_input_stream::<i8, _, _>(device, &stream_config, on_data, on_error),
-        SampleFormat::I16 => build_typed_input_stream::<i16, _, _>(device, &stream_config, on_data, on_error),
-        SampleFormat::I32 => build_typed_input_stream::<i32, _, _>(device, &stream_config, on_data, on_error),
-        SampleFormat::I64 => build_typed_input_stream::<i64, _, _>(device, &stream_config, on_data, on_error),
-        SampleFormat::U8 => build_typed_input_stream::<u8, _, _>(device, &stream_config, on_data, on_error),
-        SampleFormat::U16 => build_typed_input_stream::<u16, _, _>(device, &stream_config, on_data, on_error),
-        SampleFormat::U32 => build_typed_input_stream::<u32, _, _>(device, &stream_config, on_data, on_error),
-        SampleFormat::U64 => build_typed_input_stream::<u64, _, _>(device, &stream_config, on_data, on_error),
-        SampleFormat::F32 => build_typed_input_stream::<f32, _, _>(device, &stream_config, on_data, on_error),
-        SampleFormat::F64 => build_typed_input_stream::<f64, _, _>(device, &stream_config, on_data, on_error),
-        other => Err(AudioError::Config(format!("不支持的麦克风采样格式: {other}"))),
+        SampleFormat::I8 => {
+            build_typed_input_stream::<i8, _, _>(device, &stream_config, on_data, on_error)
+        }
+        SampleFormat::I16 => {
+            build_typed_input_stream::<i16, _, _>(device, &stream_config, on_data, on_error)
+        }
+        SampleFormat::I32 => {
+            build_typed_input_stream::<i32, _, _>(device, &stream_config, on_data, on_error)
+        }
+        SampleFormat::I64 => {
+            build_typed_input_stream::<i64, _, _>(device, &stream_config, on_data, on_error)
+        }
+        SampleFormat::U8 => {
+            build_typed_input_stream::<u8, _, _>(device, &stream_config, on_data, on_error)
+        }
+        SampleFormat::U16 => {
+            build_typed_input_stream::<u16, _, _>(device, &stream_config, on_data, on_error)
+        }
+        SampleFormat::U32 => {
+            build_typed_input_stream::<u32, _, _>(device, &stream_config, on_data, on_error)
+        }
+        SampleFormat::U64 => {
+            build_typed_input_stream::<u64, _, _>(device, &stream_config, on_data, on_error)
+        }
+        SampleFormat::F32 => {
+            build_typed_input_stream::<f32, _, _>(device, &stream_config, on_data, on_error)
+        }
+        SampleFormat::F64 => {
+            build_typed_input_stream::<f64, _, _>(device, &stream_config, on_data, on_error)
+        }
+        other => Err(AudioError::Config(format!(
+            "不支持的麦克风采样格式: {other}"
+        ))),
     }
 }
 
@@ -95,7 +117,9 @@ impl AudioCapture {
     /// 打开默认输入设备并开始录音。
     pub fn start() -> Result<Self, AudioError> {
         let host = cpal::default_host();
-        let device = host.default_input_device().ok_or(AudioError::NoInputDevice)?;
+        let device = host
+            .default_input_device()
+            .ok_or(AudioError::NoInputDevice)?;
         let config = device
             .default_input_config()
             .map_err(|e| AudioError::Config(e.to_string()))?;
@@ -121,7 +145,9 @@ impl AudioCapture {
                 }
             },
         )?;
-        stream.play().map_err(|e| AudioError::Stream(e.to_string()))?;
+        stream
+            .play()
+            .map_err(|e| AudioError::Stream(e.to_string()))?;
 
         Ok(Self {
             stream,
@@ -140,7 +166,11 @@ impl AudioCapture {
         }
         let raw = std::mem::take(&mut *self.buffer.lock().unwrap());
         let mono = mix_to_mono(&raw, self.channels);
-        Ok(resample_linear(&mono, self.device_sample_rate, TARGET_SAMPLE_RATE))
+        Ok(resample_linear(
+            &mono,
+            self.device_sample_rate,
+            TARGET_SAMPLE_RATE,
+        ))
     }
 }
 
@@ -199,10 +229,7 @@ pub fn load_wav(path: &std::path::Path) -> Result<Vec<f32>, AudioError> {
         hound::WavReader::open(path).map_err(|e| AudioError::Runtime(e.to_string()))?;
     let spec = reader.spec();
     let samples: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => reader
-            .samples::<f32>()
-            .map(|s| s.unwrap_or(0.0))
-            .collect(),
+        hound::SampleFormat::Float => reader.samples::<f32>().map(|s| s.unwrap_or(0.0)).collect(),
         hound::SampleFormat::Int => {
             let max = (1i64 << (spec.bits_per_sample.min(31) - 1)) as f32;
             reader

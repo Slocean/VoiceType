@@ -25,6 +25,8 @@ DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 ; 热更新静默重装遵循应用内当前自启状态，不重放初次安装时的勾选。
 UsePreviousTasks=no
+; 输出目录由 package.ps1 经 ISCC /O 显式传入（与另外两个产物同目录）；
+; 直接手跑 ISCC 时默认落 ..\dist。
 OutputDir=..\dist
 OutputBaseFilename={#OutBase}
 Compression=lzma2/max

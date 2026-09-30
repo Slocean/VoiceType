@@ -19,7 +19,7 @@ mod hybrid;
 mod typing;
 
 #[cfg(windows)]
-pub use clipboard::ClipboardInjector;
+pub use clipboard::{copy_to_clipboard, ClipboardInjector};
 #[cfg(windows)]
 pub use hybrid::HybridInjector;
 #[cfg(windows)]

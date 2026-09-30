@@ -206,7 +206,10 @@ mod tests {
     fn manual_stop_emits_final_once() {
         let mut s = session();
         s.accept_samples(&CHUNK).unwrap();
-        assert_eq!(s.finish_manual().unwrap(), Some(Utterance::Final("你好".into())));
+        assert_eq!(
+            s.finish_manual().unwrap(),
+            Some(Utterance::Final("你好".into()))
+        );
         assert_eq!(s.finish_manual().unwrap(), None);
     }
 

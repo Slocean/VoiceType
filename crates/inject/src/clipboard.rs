@@ -104,6 +104,18 @@ fn restore_if_unchanged(sequence: NonZeroU32, original: &str) {
     }
 }
 
+/// 仅复制文本到剪贴板，不发送任何按键。
+/// 目标窗口已切换或无有效目标时使用：用户自行粘贴，绝不盲目注入。
+pub fn copy_to_clipboard(text: &str) -> Result<(), InjectError> {
+    let Some(owner) = ClipboardOwner::new() else {
+        return Err(InjectError::Clipboard("无法创建剪贴板所有者窗口".into()));
+    };
+    let Ok(_clipboard) = Clipboard::new_attempts_for(owner.raw(), 10) else {
+        return Err(InjectError::Clipboard("剪贴板不可用".into()));
+    };
+    set(formats::Unicode, text).map_err(|e| InjectError::Clipboard(e.to_string()))
+}
+
 pub struct ClipboardInjector {
     /// 粘贴后等待目标应用消费剪贴板再恢复，避免恢复过早导致粘贴出旧内容。
     pub restore_delay: Duration,

@@ -10,8 +10,7 @@ $ErrorActionPreference = "Stop"
 
 if (-not $SkipBuild) {
     Write-Host "准备内置模型源文件（首次较慢，约 450MB 下载）…"
-    & powershell -NoProfile -ExecutionPolicy Bypass -File scripts\prepare-models.ps1
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    & (Join-Path $PSScriptRoot "prepare-models.ps1")
 
     Write-Host "release 构建（首次较慢）…"
     cargo build --release -p voicetype-tray --features embedded-models
@@ -26,6 +25,9 @@ Write-Host "打包版本: v$version"
 
 New-Item -ItemType Directory -Force $OutDir | Out-Null
 $OutDir = (Resolve-Path -LiteralPath $OutDir).Path
+# E：三个产物必须落在同一个唯一空目录；拒绝在含旧文件的目录上打包。
+$existing = @(Get-ChildItem -LiteralPath $OutDir -Force)
+if ($existing.Count -gt 0) { throw "输出目录必须是空目录（发现 $($existing.Count) 个条目）：$OutDir" }
 $assets = @()
 
 # 使用隔离的空模型目录验证实际 exe，阻止误把无内置模型的开发构建打包发布。
@@ -37,8 +39,8 @@ if (-not $smokeDir.StartsWith($outPrefix, [StringComparison]::OrdinalIgnoreCase)
 $previousModelDir = $env:VOICETYPE_MODEL_DIR
 try {
     $env:VOICETYPE_MODEL_DIR = $smokeDir
-    & $exe --self-check
-    if ($LASTEXITCODE -ne 0) { throw "实际 exe 的内置模型解压或识别引擎初始化失败（退出码 $LASTEXITCODE）" }
+    $check = Start-Process -FilePath (Resolve-Path -LiteralPath $exe).Path -ArgumentList '--self-check' -Wait -PassThru -WindowStyle Hidden
+    if ($check.ExitCode -ne 0) { throw "实际 exe 的内置模型解压或识别引擎初始化失败（退出码 $($check.ExitCode)）" }
 } finally {
     $env:VOICETYPE_MODEL_DIR = $previousModelDir
     if (Test-Path -LiteralPath $smokeDir) { Remove-Item -LiteralPath $smokeDir -Recurse -Force }
@@ -89,9 +91,15 @@ if (-not $SkipInstaller) {
     }
     if ($iscc) {
         Write-Host "生成安装包…"
-        & $iscc "/DAppVersion=$version" scripts\installer.iss
+        # E：安装包输出目录由本脚本显式传入（/O 覆盖 installer.iss 的 OutputDir），
+        # 与便携 zip / 裸 exe 落在同一目录；支持含空格路径。
+        & $iscc "/DAppVersion=$version" "/O$OutDir" scripts\installer.iss
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        $assets += (Join-Path $OutDir "voicetype-setup-x64.exe")
+        $installerOutput = Join-Path $OutDir "voicetype-setup-x64.exe"
+        if (-not (Test-Path -LiteralPath $installerOutput)) {
+            throw "Inno Setup 未在输出目录生成安装包：$installerOutput（不得从默认 dist 捡取旧文件）"
+        }
+        $assets += $installerOutput
     } else {
         throw "未找到 Inno Setup（ISCC.exe）；安装包是发布必需资产。请安装后重跑，或明确使用 -SkipInstaller。"
     }

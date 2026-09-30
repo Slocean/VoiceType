@@ -8,8 +8,8 @@
 //!
 //! 便携版与安装版的区分：安装版目录里有 Inno Setup 写入的 `install.mode` 标记。
 
-use std::io::Read;
 use std::collections::VecDeque;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -93,15 +93,25 @@ impl UpdateMode {
 }
 
 fn exe_dir() -> Option<PathBuf> {
-    std::env::current_exe().ok()?.parent().map(Path::to_path_buf)
+    std::env::current_exe()
+        .ok()?
+        .parent()
+        .map(Path::to_path_buf)
 }
 
 fn version_tuple(text: &str) -> Result<[u32; 3], String> {
     let parts: Vec<_> = text.trim().split('.').collect();
-    if parts.len() != 3 || parts.iter().any(|part| part.is_empty() || !part.bytes().all(|c| c.is_ascii_digit())) {
+    if parts.len() != 3
+        || parts
+            .iter()
+            .any(|part| part.is_empty() || !part.bytes().all(|c| c.is_ascii_digit()))
+    {
         return Err(format!("版本号格式错误，应为 X.Y.Z：{text}"));
     }
-    let parse = |part: &str| part.parse::<u32>().map_err(|_| format!("版本号超出范围：{text}"));
+    let parse = |part: &str| {
+        part.parse::<u32>()
+            .map_err(|_| format!("版本号超出范围：{text}"))
+    };
     Ok([parse(parts[0])?, parse(parts[1])?, parse(parts[2])?])
 }
 
@@ -125,15 +135,12 @@ fn http_get(url: &str, timeout: std::time::Duration) -> Result<Vec<u8>, String> 
 
 /// 远端通道优先，exe 旁的本地 app_update.json 兜底（离线/断网时仍有公告可看）。
 fn fetch_channel() -> Result<Channel, String> {
-    match http_get(APP_UPDATE_URL, std::time::Duration::from_secs(15)) {
-        Ok(bytes) => {
-            let text = String::from_utf8_lossy(&bytes);
-            match serde_json::from_str::<Channel>(&text) {
-                Ok(ch) => return Ok(ch),
-                Err(_) => {} // 远端格式异常，走本地兜底
-            }
+    if let Ok(bytes) = http_get(APP_UPDATE_URL, std::time::Duration::from_secs(15)) {
+        let text = String::from_utf8_lossy(&bytes);
+        // 远端格式异常或断网/超时，走本地兜底。
+        if let Ok(ch) = serde_json::from_str::<Channel>(&text) {
+            return Ok(ch);
         }
-        Err(_) => {} // 断网/超时，走本地兜底
     }
     if let Some(dir) = exe_dir() {
         let path = dir.join("app_update.json");
@@ -158,8 +165,8 @@ fn resolve_assets(release_json: &[u8], mode: UpdateMode) -> Result<(String, Stri
         #[serde(default)]
         assets: Vec<Asset>,
     }
-    let release: Release = serde_json::from_slice(release_json)
-        .map_err(|e| format!("Release 信息解析失败: {e}"))?;
+    let release: Release =
+        serde_json::from_slice(release_json).map_err(|e| format!("Release 信息解析失败: {e}"))?;
     let asset_name = mode.asset_name();
     let checksum_name = format!("{asset_name}.sha256");
     let mut checksum_url = None;
@@ -185,9 +192,7 @@ fn resolve_assets(release_json: &[u8], mode: UpdateMode) -> Result<(String, Stri
 
 /// 只接受本仓库的 GitHub HTTPS Release 资源，防更新地址被劫持到第三方。
 fn validate_github_url(url: &str) -> Result<(), String> {
-    let prefix = format!(
-        "https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/download/"
-    );
+    let prefix = format!("https://github.com/{GITHUB_OWNER}/{GITHUB_REPO}/releases/download/");
     if url.starts_with(&prefix) {
         Ok(())
     } else {
@@ -257,7 +262,8 @@ fn parse_checksum_manifest(bytes: &[u8], asset_name: &str) -> Result<String, Str
         let (Some(digest), Some(filename)) = (parts.next(), parts.next()) else {
             continue;
         };
-        if digest.len() == 64 && digest.bytes().all(|b| b.is_ascii_hexdigit())
+        if digest.len() == 64
+            && digest.bytes().all(|b| b.is_ascii_hexdigit())
             && Path::new(filename)
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -308,7 +314,9 @@ pub fn download_update(check: &CheckResult) -> Result<PathBuf, String> {
     let actual = sha256_hex(&blob);
     if actual != expected {
         let _ = std::fs::remove_file(&partial);
-        return Err(format!("SHA-256 校验失败，已拒绝更新（期望 {expected}，实际 {actual}）"));
+        return Err(format!(
+            "SHA-256 校验失败，已拒绝更新（期望 {expected}，实际 {actual}）"
+        ));
     }
     std::fs::write(&partial, &blob).map_err(|e| format!("写入更新包失败: {e}"))?;
     if dest.exists() {
@@ -337,7 +345,8 @@ pub fn apply_update_and_restart() -> Result<(), String> {
     let dir = exe_dir().ok_or("无法定位 exe 目录")?;
     let meta_path = dir.join(VERIFY_METADATA_NAME);
     let meta: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&meta_path).map_err(|_| "未找到已下载的更新包，请先检查更新".to_string())?,
+        &std::fs::read_to_string(&meta_path)
+            .map_err(|_| "未找到已下载的更新包，请先检查更新".to_string())?,
     )
     .map_err(|_| "校验记录损坏，请删除后重新下载".to_string())?;
     let mode = match meta.get("mode").and_then(|v| v.as_str()) {
@@ -357,7 +366,8 @@ pub fn apply_update_and_restart() -> Result<(), String> {
         .get("sha256")
         .and_then(|v| v.as_str())
         .ok_or("校验记录缺少 sha256")?;
-    let actual = sha256_hex(&std::fs::read(&update_path).map_err(|e| format!("读取更新包失败: {e}"))?);
+    let actual =
+        sha256_hex(&std::fs::read(&update_path).map_err(|e| format!("读取更新包失败: {e}"))?);
     if actual != expected.to_lowercase() {
         return Err("更新包校验失败，已拒绝应用".into());
     }
@@ -372,9 +382,7 @@ pub fn apply_update_and_restart() -> Result<(), String> {
     let verify_meta = ps_escape(&meta_path.to_string_lossy());
 
     // 安装版：静默重装（Inno 会关掉正在运行的实例、覆盖文件并按 [Run] 重启应用）。
-    let install_step = format!(
-        "Start-Process -FilePath $upd -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS','/RESTARTAPPLICATIONS' -WorkingDirectory $work"
-    );
+    let install_step = "Start-Process -FilePath $upd -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/CLOSEAPPLICATIONS','/RESTARTAPPLICATIONS' -WorkingDirectory $work".to_string();
     // 便携版：等本进程退出 → 删旧 exe → 更新包改名 → 重启。
     let portable_step = r#"
 $exited = $false
@@ -437,7 +445,11 @@ try {{
         work = work,
         log = log,
         verify_meta = verify_meta,
-        mode = if mode == UpdateMode::Installer { "installer" } else { "portable" },
+        mode = if mode == UpdateMode::Installer {
+            "installer"
+        } else {
+            "portable"
+        },
         install_step = install_step,
         portable_step = portable_step,
     );
@@ -445,8 +457,9 @@ try {{
     let ps1 = std::env::temp_dir().join(format!("voicetype_apply_update_{pid}.ps1"));
     let vbs = std::env::temp_dir().join(format!("voicetype_apply_update_{pid}.vbs"));
     std::fs::write(&ps1, script).map_err(|e| format!("写入更新助手脚本失败: {e}"))?;
-    let ps_exe = Path::new(&std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string()))
-        .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
+    let ps_exe =
+        Path::new(&std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string()))
+            .join(r"System32\WindowsPowerShell\v1.0\powershell.exe");
     let vbs_body = format!(
         "Set sh = CreateObject(\"WScript.Shell\")\r\nsh.Run \"\"\"{}\"\" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"\"{}\"\"\", 0, False\r\n",
         ps_exe.display(),
@@ -461,8 +474,16 @@ try {{
     Ok(())
 }
 
-/// 更新后台任务的完成事件（主线程经 take_update_event 取走后弹窗处理）。
+/// 更新事件的类别（C1：检查更新与公告分别呈现，不再共用一个无类型文本）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UpdateEventKind {
+    Check,
+    Announcement,
+}
+
+/// 更新后台任务的完成事件（主线程经 take_update_event 取走后分发处理）。
 pub struct UpdateEvent {
+    pub kind: UpdateEventKind,
     pub ok: bool,
     /// true = 新版已下载校验完毕，主线程询问后可 apply_update_and_restart。
     pub ready: bool,
@@ -488,12 +509,23 @@ impl NotifyHwnd {
 
 pub static UPDATE_STATE: Mutex<VecDeque<UpdateEvent>> = Mutex::new(VecDeque::new());
 
+static CHECKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// 是否已有检查更新任务在后台运行（UI 重复提交防护用）。
+pub fn is_checking() -> bool {
+    CHECKING.load(std::sync::atomic::Ordering::SeqCst)
+}
+
 /// 后台线程入口：检查 →（有更新则）下载校验，完成后 PostMessage 通知主线程弹窗。
 /// 进行中时重复触发直接忽略（托盘菜单/主界面按钮双击防护）。
 pub fn spawn_check_and_download(hwnd: isize) {
-    static CHECKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if CHECKING
-        .compare_exchange(false, true, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst)
+        .compare_exchange(
+            false,
+            true,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        )
         .is_err()
     {
         return;
@@ -502,33 +534,38 @@ pub fn spawn_check_and_download(hwnd: isize) {
     std::thread::spawn(move || {
         let event = match check_update() {
             Ok(check) if !check.update_available => UpdateEvent {
+                kind: UpdateEventKind::Check,
                 ok: true,
                 ready: false,
                 text: format!(
                     "已是最新版本 v{}\n\n—— 最新公告 ——\n{}",
                     check.current_version,
-                    if check.body.is_empty() { "（暂无）" } else { &check.body }
+                    if check.body.is_empty() {
+                        "（暂无）"
+                    } else {
+                        &check.body
+                    }
                 ),
             },
             Ok(check) => match download_update(&check) {
                 Ok(_) => UpdateEvent {
+                    kind: UpdateEventKind::Check,
                     ok: true,
                     ready: true,
                     text: format!(
                         "发现新版本 v{}（当前 v{}）\n\n{}\n\n{}",
-                        check.latest_version,
-                        check.current_version,
-                        check.title,
-                        check.body
+                        check.latest_version, check.current_version, check.title, check.body
                     ),
                 },
                 Err(e) => UpdateEvent {
+                    kind: UpdateEventKind::Check,
                     ok: false,
                     ready: false,
                     text: format!("下载更新失败：{e}\n\n可到 {RELEASES_PAGE_URL} 手动下载"),
                 },
             },
             Err(e) => UpdateEvent {
+                kind: UpdateEventKind::Check,
                 ok: false,
                 ready: false,
                 text: format!("检查更新失败：{e}"),
@@ -548,11 +585,13 @@ pub fn spawn_fetch_announcement(hwnd: isize) {
     std::thread::spawn(move || {
         let event = match fetch_announcement() {
             Ok((title, body)) => UpdateEvent {
+                kind: UpdateEventKind::Announcement,
                 ok: true,
                 ready: false,
                 text: format!("{title}\n\n{body}"),
             },
             Err(e) => UpdateEvent {
+                kind: UpdateEventKind::Announcement,
                 ok: false,
                 ready: false,
                 text: format!("获取公告失败：{e}"),
@@ -585,7 +624,10 @@ mod tests {
     #[test]
     fn checksum_manifest_only_accepts_matching_asset() {
         let valid = format!("{}  voicetype-tray.exe\n", "a".repeat(64));
-        assert_eq!(parse_checksum_manifest(valid.as_bytes(), PORTABLE_ASSET).unwrap(), "a".repeat(64));
+        assert_eq!(
+            parse_checksum_manifest(valid.as_bytes(), PORTABLE_ASSET).unwrap(),
+            "a".repeat(64)
+        );
         assert!(parse_checksum_manifest(valid.as_bytes(), INSTALLER_ASSET).is_err());
         assert!(parse_checksum_manifest(b"abc  voicetype-tray.exe\n", PORTABLE_ASSET).is_err());
     }

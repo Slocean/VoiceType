@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VoiceType</title>
+  <style>
+    :root { color-scheme: dark; font-family: "Segoe UI Variable", "Microsoft YaHei UI", sans-serif; background: #0b1020; color: #eef2ff; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    button, input { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { opacity: .55; cursor: default; }
+    .app { display: grid; grid-template-columns: 185px 1fr; height: 100vh; }
+    aside { padding: 29px 14px; background: #0f172a; border-right: 1px solid #23304a; display: flex; flex-direction: column; }
+    .brand { display: flex; align-items: center; gap: 11px; padding: 2px 11px 31px; font-weight: 750; font-size: 19px; letter-spacing: -.5px; }
+    .brand-mark { display: grid; place-items: center; height: 31px; width: 31px; border-radius: 10px; background: linear-gradient(135deg,#49e6cb,#5287ff); color: #071625; font-size: 19px; }
+    nav { display: grid; gap: 6px; }
+    nav button { width: 100%; border: 0; background: transparent; color: #9cabca; text-align: left; padding: 11px 13px; border-radius: 11px; font-weight: 600; }
+    nav button.active { color: #fff; background: #263857; box-shadow: inset 3px 0 #64e3cb; }
+    nav button:hover:not(.active) { background: #1b2941; color: #e6eaf5; }
+    .side-foot { margin-top: auto; padding: 0 11px; color: #697b9a; font-size: 12px; line-height: 1.5; }
+    main { overflow-y: auto; padding: 31px 35px 35px; background: radial-gradient(circle at 95% 0%, #162444 0, #0b1020 47%); }
+    main::-webkit-scrollbar { width: 8px; } main::-webkit-scrollbar-thumb { background: #2b3954; border-radius: 9px; }
+    .page { display: none; } .page.active { display: block; }
+    .eyebrow { color: #67e4d0; font-size: 11px; font-weight: 750; letter-spacing: 2.5px; text-transform: uppercase; }
+    h1 { margin: 7px 0 6px; font-size: 29px; line-height: 1.2; letter-spacing: -.9px; }
+    .lede { margin: 0 0 24px; color: #95a5c1; font-size: 13px; line-height: 1.6; }
+    .hero { display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 22px 24px; border: 1px solid #2a4760; border-radius: 18px; background: linear-gradient(105deg,#183546,#1b2c55); box-shadow: 0 16px 40px #0003; }
+    .hero-title { display: flex; align-items: center; gap: 9px; font-size: 20px; font-weight: 720; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #55dfaa; box-shadow: 0 0 0 5px #55dfaa20; }
+    .dot.bad { background: #fb7777; box-shadow: 0 0 0 5px #fb777720; }
+    .hero p { margin: 7px 0 0; color: #b8c6dc; font-size: 12px; }
+    .primary { border: 0; color: #072b2b; background: #6ee7cf; font-weight: 750; border-radius: 10px; padding: 12px 18px; white-space: nowrap; }
+    .primary:hover:not(:disabled) { background: #a1f4e2; }
+    .section-title { display: flex; align-items: center; justify-content: space-between; margin: 27px 0 12px; font-size: 14px; font-weight: 750; color: #dce6f9; }
+    .card { border: 1px solid #26344f; border-radius: 15px; background: #131d32; padding: 17px 18px; }
+    .choice-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+    .choice { text-align: left; border: 1px solid #32415a; background: #172238; border-radius: 11px; color: #e6eefa; padding: 13px 12px; }
+    .choice strong { display: block; font-size: 13px; margin-bottom: 5px; }
+    .choice span { display: block; color: #8fa0bd; font-size: 11px; line-height: 1.45; }
+    .choice.active { border-color: #66e6d0; background: #183d47; box-shadow: inset 0 0 0 1px #66e6d055; }
+    .choice:hover:not(:disabled) { border-color: #67a7c0; }
+    .row { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .row + .row { border-top: 1px solid #273650; margin-top: 16px; padding-top: 16px; }
+    .label { font-weight: 700; font-size: 13px; }
+    .sub { color: #8fa0bd; font-size: 11px; margin-top: 5px; line-height: 1.45; }
+    .hotkey-wrap { display: flex; gap: 8px; }
+    .hotkey { width: 146px; color: #e9f5ff; background: #0e172a; border: 1px solid #384960; border-radius: 9px; padding: 9px; text-align: center; outline: none; font-size: 12px; }
+    .hotkey:focus { border-color: #6ee7cf; box-shadow: 0 0 0 3px #6ee7cf22; }
+    .secondary { border: 1px solid #3d5574; color: #ddf0ff; background: #263653; border-radius: 9px; padding: 9px 14px; font-size: 12px; font-weight: 700; }
+    .secondary:hover:not(:disabled) { background: #344a6d; }
+    .switch { position: relative; width: 44px; height: 25px; border: 0; border-radius: 99px; background: #465571; transition: background .2s; }
+    .switch.on { background: #57dac4; }
+    .switch::after { content: ""; position: absolute; top: 4px; left: 4px; width: 17px; height: 17px; border-radius: 50%; background: #fff; transition: transform .2s; }
+    .switch.on::after { transform: translateX(19px); }
+    .path { margin-top: 8px; color: #6f85a5; font-size: 10px; overflow-wrap: anywhere; }
+    .actions { display: flex; gap: 9px; margin: 20px 0; }
+    .announcement { min-height: 140px; max-height: 265px; overflow: auto; white-space: pre-wrap; line-height: 1.6; color: #bfcce2; font-size: 12px; }
+    .about-grid { display: grid; grid-template-columns: 115px 1fr; gap: 15px 20px; color: #9caeca; font-size: 13px; }
+    .about-grid strong { color: #e6efff; font-weight: 600; }
+    .notice { position: fixed; right: 22px; bottom: 19px; max-width: 350px; border-radius: 11px; padding: 12px 16px; background: #24534d; color: #e8fff8; border: 1px solid #60cbb7; box-shadow: 0 14px 30px #0008; font-size: 12px; opacity: 0; pointer-events: none; transform: translateY(9px); transition: .2s; }
+    .notice.show { opacity: 1; transform: translateY(0); }
+    .notice.error { background: #502932; border-color: #d27883; }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside>
+      <div class="brand"><span class="brand-mark">◉</span> VoiceType</div>
+      <nav aria-label="页面导航">
+        <button type="button" class="active" data-page="home">⌂ &nbsp; 语音输入</button>
+        <button type="button" data-page="settings">⚙ &nbsp; 偏好设置</button>
+        <button type="button" data-page="about">ⓘ &nbsp; 更新与关于</button>
+      </nav>
+      <div class="side-foot">离线识别 · 本地处理<br>关闭窗口后仍在托盘运行</div>
+    </aside>
+    <main>
+      <section id="home" class="page active">
+        <div class="eyebrow">Voice workspace</div>
+        <h1>开口就能输入</h1>
+        <p class="lede">回到目标应用，按快捷键开始录音。停顿后自动结束并输入到该应用。</p>
+        <div class="hero">
+          <div><div class="hero-title"><span id="status-dot" class="dot"></span><span id="status-title">正在检查模型…</span></div><p id="status-sub">请稍候</p></div>
+          <button id="record-btn" class="primary" type="button">隐藏窗口，去目标应用</button>
+        </div>
+        <p id="announce-hint" class="sub" hidden></p>
+        <div class="section-title">输入方式</div>
+        <div class="card"><div class="choice-grid">
+          <button class="choice" data-mode="paste" type="button"><strong>粘贴</strong><span>识别结束后一次性输入</span></button>
+          <button class="choice" data-mode="type" type="button"><strong>逐字键入</strong><span>模拟键盘输入文字</span></button>
+          <button class="choice" data-mode="hybrid" type="button"><strong>实时输入</strong><span>边说边显示，结束时定稿</span></button>
+        </div></div>
+        <div class="section-title">快速设置</div>
+        <div class="card"><div class="row"><div><div class="label">录音快捷键</div><div class="sub">点击输入框，再按希望使用的组合键（Ctrl/Shift/Alt；Ctrl+Alt 即 AltGr，可能与部分键盘布局冲突）</div></div><div class="hotkey-wrap"><input id="hotkey" class="hotkey" readonly aria-label="录音快捷键"><button id="apply-hotkey" class="secondary" type="button">应用</button></div></div></div>
+      </section>
+      <section id="settings" class="page">
+        <div class="eyebrow">Preferences</div><h1>偏好设置</h1><p class="lede">调整启动行为和本地模型状态。</p>
+        <div class="card"><div class="row"><div><div class="label">开机自动启动</div><div class="sub">登录 Windows 后在托盘中运行 VoiceType</div></div><button id="autostart" class="switch" type="button" role="switch" aria-label="开机自动启动" aria-checked="false"></button></div>
+        <div class="row"><div><div class="label">语音模型</div><div class="sub" id="model-desc">检查中…</div><div class="path" id="model-path"></div></div><div><span id="model-badge" class="sub">—</span><button id="repair-models" class="secondary" type="button" style="margin-left:9px">重新检查 / 修复</button></div></div></div>
+      </section>
+      <section id="about" class="page">
+        <div class="eyebrow">Updates &amp; about</div><h1>更新与关于</h1><p class="lede">查看当前版本、检查更新和阅读更新公告。</p>
+        <div class="card"><div class="row"><div><div class="label">VoiceType <span id="version"></span></div><div class="sub">离线中文语音输入</div></div><button id="update-btn" class="secondary" type="button">检查更新</button></div></div>
+        <div class="card" style="margin-top:12px"><div class="label">最近一次检查结果</div><div class="sub" id="update-result">尚无检查结果。</div></div>
+        <div class="section-title">更新公告</div>
+        <div class="card"><div class="announcement" id="announcement">点击下方按钮获取最新公告。</div><div class="actions"><button id="announcement-btn" class="secondary" type="button">获取更新公告</button></div></div>
+        <div class="section-title">项目</div>
+        <div class="card about-grid"><span>开源地址</span><strong>github.com/Slocean/VoiceType</strong><span>数据处理</span><strong>语音识别在本机完成</strong></div>
+      </section>
+    </main>
+  </div>
+  <div id="notice" class="notice" role="status"></div>
+  <script>
+    const send = (message) => window.ipc.postMessage(JSON.stringify(message));
+    let state = {}, pendingKey = null, noticeTimer = null, seqCounter = 0;
+    const pending = new Map();
+    const $ = (id) => document.getElementById(id);
+    const ACTION_BUTTONS = {
+      mode: () => document.querySelectorAll('[data-mode]'),
+      hotkey: () => [$('apply-hotkey')],
+      autostart: () => [$('autostart')],
+      record: () => [$('record-btn')],
+      checkUpdate: () => [$('update-btn')],
+      announcement: () => [$('announcement-btn')],
+      repairModels: () => [$('repair-models')]
+    };
+    function setBusy(action, busy) {
+      const get = ACTION_BUTTONS[action];
+      if (get) get().forEach(el => { el.disabled = busy; });
+    }
+    function sendAction(action, extra = {}) {
+      if (pending.has(action)) { window.voiceType.notice('操作进行中，请稍候', false); return; }
+      const seq = ++seqCounter;
+      pending.set(action, seq);
+      setBusy(action, true);
+      send(Object.assign({ seq, action }, extra));
+    }
+    document.querySelectorAll('nav button').forEach(button => button.addEventListener('click', () => {
+      document.querySelectorAll('nav button, .page').forEach(el => el.classList.remove('active'));
+      button.classList.add('active'); $(button.dataset.page).classList.add('active');
+    }));
+    document.querySelectorAll('[data-mode]').forEach(button => button.addEventListener('click', () => sendAction('mode', { value: button.dataset.mode })));
+    $('record-btn').addEventListener('click', () => sendAction('record'));
+    $('autostart').addEventListener('click', () => sendAction('autostart', { value: !state.autostart }));
+    $('update-btn').addEventListener('click', () => sendAction('checkUpdate'));
+    $('announcement-btn').addEventListener('click', () => sendAction('announcement'));
+    $('repair-models').addEventListener('click', () => sendAction('repairModels'));
+    // 受支持键位映射：物理键位 event.code → Win32 VK。浏览器 keyCode 不可信
+    //（受输入法与布局影响），一律不用。纯修饰键、Win 键、未知键位在此拒绝。
+    const VK_MAP = {
+      Backquote: [0xC0, '`'], Minus: [0xBD, '-'], Equal: [0xBB, '='],
+      BracketLeft: [0xDB, '['], BracketRight: [0xDD, ']'], Backslash: [0xDC, '\\'],
+      Semicolon: [0xBA, ';'], Quote: [0xDE, "'"], Comma: [0xBC, ','],
+      Period: [0xBE, '.'], Slash: [0xBF, '/'], Space: [0x20, 'Space'],
+      Enter: [0x0D, 'Enter'], Backspace: [0x08, 'Backspace'], Tab: [0x09, 'Tab'],
+      Escape: [0x1B, 'Esc'],
+      PageUp: [0x21, 'PageUp'], PageDown: [0x22, 'PageDown'], End: [0x23, 'End'], Home: [0x24, 'Home'],
+      ArrowLeft: [0x25, '←'], ArrowUp: [0x26, '↑'], ArrowRight: [0x27, '→'], ArrowDown: [0x28, '↓'],
+      Insert: [0x2D, 'Insert'], Delete: [0x2E, 'Delete'], PrintScreen: [0x2C, 'PrtSc'],
+      NumpadAdd: [0x6B, 'Num+'], NumpadSubtract: [0x6D, 'Num-'], NumpadMultiply: [0x6A, 'Num*'],
+      NumpadDivide: [0x6F, 'Num/'], NumpadDecimal: [0x6E, 'Num.']
+    };
+    function vkFromEvent(event) {
+      const code = event.code;
+      if (/^Key[A-Z]$/.test(code)) return [0x41 + code.charCodeAt(3) - 65, code.slice(3)];
+      if (/^Digit[0-9]$/.test(code)) { const d = code.slice(5); return [0x30 + Number(d), d]; }
+      if (/^Numpad[0-9]$/.test(code)) { const d = code.slice(6); return [0x60 + Number(d), 'Num' + d]; }
+      const f = code.match(/^F([1-9]|1[0-9]|2[0-4])$/);
+      if (f) return [0x70 + Number(f[1]) - 1, 'F' + f[1]];
+      if (code in VK_MAP) return VK_MAP[code];
+      return null;
+    }
+    $('hotkey').addEventListener('focus', () => { $('hotkey').value = '请按组合键…'; });
+    $('hotkey').addEventListener('blur', () => { if (!pendingKey) $('hotkey').value = state.hotkey || 'F9'; });
+    $('hotkey').addEventListener('keydown', (event) => {
+      event.preventDefault(); event.stopPropagation();
+      if (/^(Control|Shift|Alt|Meta)(Left|Right)$/.test(event.code)) return;
+      if (event.metaKey) { $('hotkey').value = '不支持 Win 键组合'; return; }
+      const mapped = vkFromEvent(event);
+      if (!mapped) { $('hotkey').value = '不支持的按键，请换一个'; return; }
+      const mods = (event.altKey ? 1 : 0) | (event.ctrlKey ? 2 : 0) | (event.shiftKey ? 4 : 0);
+      const parts = [event.ctrlKey && 'Ctrl', event.shiftKey && 'Shift', event.altKey && 'Alt', mapped[1]].filter(Boolean);
+      pendingKey = { vk: mapped[0], mods: mods };
+      $('hotkey').value = parts.join(' + ');
+    });
+    $('apply-hotkey').addEventListener('click', () => {
+      if (!pendingKey) { window.voiceType.notice('先点击输入框并按下新快捷键', false); return; }
+      sendAction('hotkey', pendingKey); pendingKey = null;
+    });
+    window.voiceType = {
+      state(next) {
+        state = next;
+        $('version').textContent = 'v' + next.version;
+        const ok = next.modelReady;
+        const pendingActions = next.pending || [];
+        ['mode','hotkey','autostart','record','checkUpdate','announcement','repairModels'].forEach(a => setBusy(a, pendingActions.includes(a)));
+        $('status-dot').classList.toggle('bad', !ok);
+        $('status-title').textContent = !ok ? (next.modelStatus || '语音模型未就绪') : next.recording ? '正在录音' : '准备就绪';
+        $('status-sub').textContent = !ok
+          ? '可在偏好设置中重新检查 / 修复'
+          : next.recording ? '再次点击或按快捷键结束' : '点击右侧按钮隐藏本窗口，然后在目标应用按 ' + next.hotkey;
+        $('record-btn').textContent = next.recording ? '结束录音' : '隐藏窗口，去目标应用';
+        // 录音中按钮保持可用（作为"结束录音"）；模型未就绪且未录音时禁用。
+        $('record-btn').disabled = $('record-btn').disabled || (!ok && !next.recording);
+        $('model-desc').textContent = next.modelStatus || (ok ? '内置模型已就绪，可离线识别' : '内置模型不可用');
+        $('model-badge').textContent = ok ? '已就绪' : '异常';
+        $('model-path').textContent = next.modelPath || '';
+        $('autostart').classList.toggle('on', next.autostart);
+        $('autostart').setAttribute('aria-checked', String(next.autostart));
+        document.querySelectorAll('[data-mode]').forEach(el => el.classList.toggle('active', el.dataset.mode === next.mode));
+        if (!pendingKey && document.activeElement !== $('hotkey')) $('hotkey').value = next.hotkey;
+        // C1：持久结果——关窗重开后仍可查看，直到下一次请求替换。
+        const lastCheck = next.lastCheck;
+        $('update-result').textContent = lastCheck
+          ? '检查更新（' + (lastCheck.ok ? '成功' : '失败') + '）：' + lastCheck.text
+          : '尚无检查结果。';
+        const lastAnn = next.lastAnnouncement;
+        if (lastAnn) {
+          $('announcement').textContent = lastAnn.text;
+          const hint = $('announce-hint');
+          hint.hidden = false;
+          hint.textContent = '📢 公告已更新（' + (lastAnn.ok ? '成功' : '失败') + '）：'
+            + lastAnn.text.split('\n')[0] + '（详见「更新与关于」页）';
+        } else {
+          $('announce-hint').hidden = true;
+        }
+      },
+      announcement(text) { $('announcement').textContent = text; },
+      result(r) {
+        if (r.seq && pending.get(r.action) !== r.seq) return; // 过期结果
+        if (r.state === 'running') { window.voiceType.notice(r.message, true); return; }
+        if (r.seq) pending.delete(r.action);
+        setBusy(r.action, false);
+        window.voiceType.notice(r.message, r.ok);
+      },
+      notice(text, ok) {
+        const node = $('notice'); node.textContent = text; node.classList.toggle('error', !ok); node.classList.add('show');
+        clearTimeout(noticeTimer); noticeTimer = setTimeout(() => node.classList.remove('show'), 4400);
+      }
+    };
+    send({action:'ready'});
+  </script>
+</body>
+</html>

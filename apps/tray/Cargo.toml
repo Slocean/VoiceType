@@ -1,6 +1,6 @@
 [package]
 name = "voicetype-tray"
-version = "0.7.0"
+version = "0.8.0"
 edition.workspace = true
 license.workspace = true
 description = "VoiceType 托盘常驻应用：F9 全局热键录音，实时识别并注入当前焦点窗口"
@@ -35,6 +35,7 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Shell",
+    "Win32_UI_HiDpi",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_System_LibraryLoader",
     "Win32_System_Threading",
@@ -44,3 +45,5 @@ windows = { version = "0.62", features = [
     # 开机自启：HKCU\...\Run 注册表读写。
     "Win32_System_Registry",
 ] }
+wry = { version = "0.55", default-features = false }
+raw-window-handle = "0.6"

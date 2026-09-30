@@ -68,7 +68,9 @@ impl AudioStream {
     /// 参数为 16kHz 单声道 f32 块。回调内不要做重活（本层已完成重采样）。
     pub fn start(on_chunk: impl FnMut(&[f32]) + Send + 'static) -> Result<Self, AudioError> {
         let host = cpal::default_host();
-        let device = host.default_input_device().ok_or(AudioError::NoInputDevice)?;
+        let device = host
+            .default_input_device()
+            .ok_or(AudioError::NoInputDevice)?;
         let config = device
             .default_input_config()
             .map_err(|e| AudioError::Config(e.to_string()))?;
@@ -96,7 +98,9 @@ impl AudioStream {
                 }
             },
         )?;
-        stream.play().map_err(|e| AudioError::Stream(e.to_string()))?;
+        stream
+            .play()
+            .map_err(|e| AudioError::Stream(e.to_string()))?;
 
         Ok(Self {
             stream,
