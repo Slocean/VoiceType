@@ -263,6 +263,16 @@
 5. D3 更新网络适配器未抽取（registry/fs 已可注入）；updater.rs 的 HTTP 仍为直接调用。
 6. LNK4098 结论已记录于 ci.yml（sherpa-onnx /MT 与 Rust /MD 组合），消除需重编 sherpa-onnx，不在本轮范围。
 
+### CI 执行发现（PR CI 已运行）
+
+- 第 1 次：`git diff --check` 失败——actions/checkout 默认浅克隆导致 `base..HEAD` 无法解析（`fatal: Invalid revision range`）。修复：checkout 加 `fetch-depth: 0`（fb51a9f）。
+- 第 2 次（14m32s）：fmt/clippy/test/DOM/自检/完整打包全部通过，`验证发布资产` 失败——verify_release.py 中文输出在 CI cp1252 控制台触发 UnicodeEncodeError。修复：与 release_notes.py 同款 stdout reconfigure（c8ad496）。该缺陷属"测试工具自身不可运行即门禁失败"，由 CI 拦截并修复。
+- 第 3 次（36604702726，14m12s）：**全绿**。完整链通过：fmt/clippy(-D)/locked 测试/Python/DOM → embedded-models 构建 + 隔离目录自检 → Inno Setup 完整打包到唯一空目录 → verify_release --dist「3 个资产及清单齐全」→ 产物上传（146MB）。
+  - CI 产出候选资产 SHA-256（对应提交 c8ad496，仅 CI 门禁证据，非发布资产）：
+    - voicetype-tray.exe: ee623392dce39b12ad9ea16b6d23d1f00efd55d1c6b9cefa3e44e96b5a5b8712
+    - voicetype-setup-x64.exe: d737216bb109bc806af09084ea0bd2e1d4096f3cdabc1f6fb272fcc8688df51b
+    - voicetype-win-x64-portable.zip: 283dcb22636f0dcb4034c1abd29261d32af92e081fcc177b4a80bed1f4788445
+
 ### 结论
 
-v0.8.0 **No-Go**：代码工作包 A–E 已落地且本地门禁全绿；待 PR CI 绿、完整打包六资产验证、GUI 冒烟与 §8.2/§8.3 真机验收对最终 main SHA 签收后，方可进入 §10 打 tag 流程。tag 未创建、未推送。
+v0.8.0 **No-Go**：代码工作包 A–E 已落地；本地门禁与 PR CI 全绿（含完整打包六资产验证）。剩余阻断项：GUI 冒烟（gui_smoke.ps1 对 CI 产物）、§8.2 双窗口/DPI/无 WebView2 真机验收、§8.3 双形态本地更新助手模拟与人工麦克风验收——需对最终 main SHA 签收后方可进入 §10 打 tag 流程。tag 未创建、未推送。
